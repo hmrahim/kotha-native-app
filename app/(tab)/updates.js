@@ -1,6 +1,6 @@
 // app/(tab)/updates.js  ─────  Facebook-style Story screen (full clone)
 import { Ionicons } from '@expo/vector-icons'
-import { Video } from 'expo-av'
+import { VideoView, useVideoPlayer } from 'expo-video'
 import * as ImagePicker from 'expo-image-picker'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -104,8 +104,37 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
   const [showViews, setShowViews] = useState(false)
   const progress = useRef(new Animated.Value(0)).current
   const timerRef = useRef(null)
-  const videoRef = useRef(null)
   const insets   = useSafeAreaInsets()
+
+  // expo-video player — story change হলে source update হয়
+  const isVideoMedia = media?.type === 'video'
+  const videoPlayer = useVideoPlayer(
+    isVideoMedia ? { uri: media?.url } : null,
+    (player) => { player.loop = false }
+  )
+
+  // play/pause sync
+  useEffect(() => {
+    if (!videoPlayer || !isVideoMedia) return
+    try { paused ? videoPlayer.pause() : videoPlayer.play() } catch (_) {}
+  }, [paused, isVideoMedia, videoPlayer])
+
+  // video progress + finish detection
+  useEffect(() => {
+    if (!videoPlayer || !isVideoMedia) return
+    const interval = setInterval(() => {
+      try {
+        const dur = videoPlayer.duration
+        if (dur > 0) progress.setValue(Math.min(videoPlayer.currentTime / dur, 1))
+      } catch (_) {}
+    }, 250)
+    let endSub
+    try {
+      endSub = videoPlayer.addListener('playToEnd', () => { clearInterval(interval); goNext() })
+    } catch (_) {}
+    return () => { clearInterval(interval); try { endSub?.remove() } catch (_) {} }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoPlayer, isVideoMedia, groupIdx, storyIdx])
 
   const group   = groups[groupIdx]
   const story   = group?.stories?.[storyIdx]
@@ -223,20 +252,11 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
     }
     if (media.type === 'video') {
       return (
-        <Video
-          ref={videoRef}
-          source={{ uri: media.url }}
+        <VideoView
+          player={videoPlayer}
           style={sv.mediaFull}
-          resizeMode="contain"
-          shouldPlay={!paused}
-          isLooping={false}
-          onPlaybackStatusUpdate={(status) => {
-            if (status.isLoaded && status.durationMillis && !paused) {
-              const pct = status.positionMillis / status.durationMillis
-              progress.setValue(pct)
-              if (status.didJustFinish) goNext()
-            }
-          }}
+          contentFit="contain"
+          nativeControls={false}
         />
       )
     }
@@ -340,6 +360,12 @@ function StoryCreator({ visible, onClose, onCreated }) {
   const [textColor, setTextColor] = useState('#FFFFFF')
   const [uploading, setUploading] = useState(false)
   const insets = useSafeAreaInsets()
+
+  // video preview player for StoryCreator
+  const previewPlayer = useVideoPlayer(
+    mode === 'video' && mediaFile ? { uri: mediaFile.uri } : null,
+    (player) => { player.loop = true; player.play() }
+  )
 
   const reset = () => { setMode(null); setMediaFile(null); setText(''); setBgColor(TEXT_BG_COLORS[0]) }
 
@@ -454,7 +480,7 @@ function StoryCreator({ visible, onClose, onCreated }) {
             <Image source={{ uri: mediaFile.uri }} style={{ width: SCREEN_W, height: SCREEN_H * 0.75 }} resizeMode="contain" />
           )}
           {mode === 'video' && mediaFile && (
-            <Video source={{ uri: mediaFile.uri }} style={{ width: SCREEN_W, height: SCREEN_H * 0.75 }} resizeMode="contain" shouldPlay isLooping />
+            <VideoView player={previewPlayer} style={{ width: SCREEN_W, height: SCREEN_H * 0.75 }} contentFit="contain" nativeControls={false} />
           )}
           {mode === 'text' && (
             <View style={{ width: SCREEN_W, height: SCREEN_H * 0.75, backgroundColor: bgColor, alignItems: 'center', justifyContent: 'center', padding: 32 }}>

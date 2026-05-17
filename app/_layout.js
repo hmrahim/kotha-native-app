@@ -18,8 +18,8 @@ import {
 import { setupAndroidChannel } from '../services/notification'
 import { getSocket } from '../services/socket'
 import { playIncoming } from '../services/sounds'
-
-SplashScreen.preventAutoHideAsync().catch(() => {})
+import { CallProvider } from '../context/CallContext'
+SplashScreen.preventAutoHideAsync().catch(() => { })
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,6 +42,15 @@ const navigateFromNotification = (router, data) => {
       },
     })
   }
+
+  if (data?.type === 'incoming_call' && data?.callId) {
+    router.push({
+      pathname: '/incoming-call',
+      params: {},  // CallContext socket listener এ state set হবে
+    })
+    return
+  }
+
 }
 
 function AppNavigator() {
@@ -64,7 +73,7 @@ function AppNavigator() {
   // Auth guard
   useEffect(() => {
     if (!nativeSplashHidden || loading) return
-    const inAuthScreens  = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
+    const inAuthScreens = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
     const inVerifyScreen = segments[0] === 'verify-email'
 
     if (!user) {
@@ -139,7 +148,7 @@ function AppNavigator() {
     const initNotifications = async () => {
       try {
         await setupAndroidChannel()
-        await registerForPushNotifications().catch(() => {})
+        await registerForPushNotifications().catch(() => { })
         console.log('✅ Notification setup complete')
       } catch (err) {
         console.log('Notification init error:', err?.message)
@@ -157,7 +166,7 @@ function AppNavigator() {
 
     const unsub = setupNotificationListeners({
       onTap: (data) => navigateFromNotification(router, data),
-      onReceive: (_data) => {},
+      onReceive: (_data) => { },
     })
 
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -186,7 +195,7 @@ function AppNavigator() {
     return (
       <>
         <StatusBar style="light" backgroundColor={BG} />
-        <AnimatedSplash onDone={() => {}} />
+        <AnimatedSplash onDone={() => { }} />
       </>
     )
   }
@@ -203,16 +212,23 @@ function AppNavigator() {
           animationDuration: 150,
         }}
       >
-        <Stack.Screen name="(tab)"           options={{ animation: 'none',             animationDuration: 150, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="login"           options={{ animation: 'fade',             animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="register"        options={{ animation: 'slide_from_bottom', animationDuration: 250, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="verify-email"    options={{ animation: 'fade',             animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="(tab)" options={{ animation: 'none', animationDuration: 150, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="login" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="register" options={{ animation: 'slide_from_bottom', animationDuration: 250, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="verify-email" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
         <Stack.Screen name="forgot-password" options={{ animation: 'slide_from_bottom', animationDuration: 220, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="chat"            options={{ animation: 'slide_from_right',  animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true, fullScreenGestureEnabled: true }} />
-        <Stack.Screen name="profile"         options={{ animation: 'slide_from_right',  animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="settings"        options={{ animation: 'slide_from_right',  animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="developer"       options={{ animation: 'slide_from_right',  animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="change-password" options={{ animation: 'slide_from_right',  animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="chat" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true, fullScreenGestureEnabled: true }} />
+        <Stack.Screen name="profile" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="settings" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="developer" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="change-password" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+
+        <Stack.Screen name="call" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#000' }, gestureEnabled: false }} />
+        <Stack.Screen name="incoming-call" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#0D1117' }, gestureEnabled: false }} />
+
+
+
+
       </Stack>
     </View>
   )
@@ -222,7 +238,9 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <AppNavigator />
+        <CallProvider>
+          <AppNavigator />
+        </CallProvider>
       </AuthProvider>
     </QueryClientProvider>
   )

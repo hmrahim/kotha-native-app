@@ -1,7 +1,10 @@
+
 import React from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, Image, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
 import { T, getColor, getInitials } from '../theme'
+import { getSocket } from '../services/socket'
 
 function HeaderAvatar({ name, avatar, online }) {
   return (
@@ -19,7 +22,31 @@ function HeaderAvatar({ name, avatar, online }) {
 }
 
 export default function ChatHeader({ chat, onBack, onPressProfile }) {
-  const { name, online, lastSeen, avater } = chat
+  const { name, online, lastSeen, avater, receiverId } = chat
+  const router = useRouter()
+
+  const startCall = (type) => {
+    const socket = getSocket()
+    if (!socket?.connected) return Alert.alert('Offline', 'Connect to internet first')
+    if (!receiverId) return
+    socket.emit('call:initiate', { receiverId, type }, (ack) => {
+      if (!ack?.ok) {
+        if (ack?.error === 'busy') return Alert.alert('Busy', 'User is on another call')
+        if (ack?.error === 'blocked' || ack?.error === 'blocked_by_you')
+          return Alert.alert('Blocked', 'Cannot call this user')
+        return Alert.alert('Error', ack?.error || 'Failed to start call')
+      }
+      router.push({
+        pathname: '/call',
+        params: {
+          callId: ack.callId, channelName: ack.channelName, type,
+          token: ack.token, uid: String(ack.uid), appId: ack.appId,
+          peerName: name || '', peerAvatar: avater || '',
+          outgoing: '1',
+        },
+      })
+    })
+  }
 
   return (
     <View style={s.header}>
@@ -27,7 +54,6 @@ export default function ChatHeader({ chat, onBack, onPressProfile }) {
         <Ionicons name="arrow-back" color={T.accent} size={24} />
       </TouchableOpacity>
 
-      {/* Tapping avatar/name opens profile modal */}
       <TouchableOpacity style={s.info} activeOpacity={0.7} onPress={onPressProfile}>
         <HeaderAvatar name={name} avatar={avater} online={online} />
         <View style={s.nameWrap}>
@@ -39,10 +65,10 @@ export default function ChatHeader({ chat, onBack, onPressProfile }) {
       </TouchableOpacity>
 
       <View style={s.actions}>
-        <TouchableOpacity style={s.iconBtn}>
+        <TouchableOpacity style={s.iconBtn} onPress={() => startCall('video')}>
           <Ionicons name="videocam-outline" color={T.textSecond} size={24} />
         </TouchableOpacity>
-        <TouchableOpacity style={s.iconBtn}>
+        <TouchableOpacity style={s.iconBtn} onPress={() => startCall('voice')}>
           <Ionicons name="call-outline" color={T.textSecond} size={22} />
         </TouchableOpacity>
         <TouchableOpacity style={s.iconBtn}>

@@ -5,8 +5,8 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint"
   },
@@ -73,6 +73,9 @@
     "eslint-config-expo": "~10.0.0",
     "tailwindcss": "^3.4.19",
     "typescript": "~5.9.2"
+  },
+  "optionalDependencies": {
+    "lightningcss-linux-x64-gnu": "1.29.2"
   },
   "private": true
 }
