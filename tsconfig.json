@@ -11,7 +11,11 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    "nativewind-env.d.ts",
+    "app/_layout.js",
+    "app/index.js",
+    "app/(drawer)/(services)/location.js",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
-  ]
+, "context/AuthContext.js", "app/language.js"  ]
 }

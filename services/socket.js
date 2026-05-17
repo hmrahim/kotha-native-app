@@ -1,0 +1,60 @@
+// services/socket.js
+import { io } from 'socket.io-client'
+import Constants from 'expo-constants'
+
+// const SERVER_URL =
+//   process.env.EXPO_PUBLIC_SOCKET_URL ||
+//   process.env.EXPO_PUBLIC_API_URL?.replace(/\/api\/?$/, '') ||
+//   Constants.expoConfig?.extra?.socketUrl ||
+//   'http://localhost:5000'
+const SERVER_URL ='http://192.168.100.185:5000'
+
+console.log('🔌 Socket URL:', SERVER_URL)
+
+let socket = null
+
+export const connectSocket = (userId) => {
+  if (!userId) return null
+  if (socket?.connected) return socket
+
+  if (socket) {
+    try { socket.removeAllListeners(); socket.disconnect() } catch (_) {}
+    socket = null
+  }
+
+  socket = io(SERVER_URL, {
+    auth: { userId: userId.toString() },
+    transports: ['websocket'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 800,
+    reconnectionDelayMax: 3000,
+    timeout: 10000,
+  })
+
+  socket.on('connect', () => console.log('✅ Socket connected:', socket.id))
+  socket.on('disconnect', (reason) => console.log('❌ Socket disconnected:', reason))
+  socket.on('connect_error', (e) => console.log('⚠️ Socket connect_error:', e.message))
+  socket.on('reconnect', (n) => console.log('🔁 Socket reconnected after', n, 'tries'))
+
+  return socket
+}
+
+export const getSocket = () => socket
+export const disconnectSocket = () => {
+  if (socket) {
+    socket.removeAllListeners()
+    socket.disconnect()
+    socket = null
+  }
+}
+
+// Promise-based send with ACK (instant)
+export const sendMessageSocket = (payload) =>
+  new Promise((resolve, reject) => {
+    if (!socket?.connected) return reject(new Error('Socket not connected'))
+    socket.emit('send_message', payload, (ack) => {
+      if (ack?.ok) resolve(ack)
+      else reject(new Error(ack?.error || 'Send failed'))
+    })
+  })

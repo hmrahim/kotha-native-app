@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "921437174046",
+    "project_id": "kothaa",
+    "storage_bucket": "kothaa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:921437174046:android:7d4fc43f45a22a0e2fb10f",
+        "android_client_info": {
+          "package_name": "com.kotha.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAUOElDzbQAGphOrsCdzMa5qS3uiwBHWio"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
