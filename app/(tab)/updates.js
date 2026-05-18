@@ -1,4 +1,4 @@
-// app/(tab)/updates.js  ─────  Facebook-style Story screen (full clone)
+// app/(tab)/updates.js
 import { Ionicons } from '@expo/vector-icons'
 import { VideoView, useVideoPlayer } from 'expo-video'
 import * as ImagePicker from 'expo-image-picker'
@@ -48,29 +48,38 @@ const T = {
   textMuted:   '#484F58',
 }
 
-const STORY_DURATION = 15000   // 15 seconds per story item
-const TEXT_BG_COLORS = ['#2DD4BF','#7C3AED','#DC2626','#059669','#D97706','#0EA5E9','#EC4899','#1F2937']
+const STORY_DURATION  = 15000
+const TEXT_BG_COLORS  = ['#2DD4BF','#7C3AED','#DC2626','#059669','#D97706','#0EA5E9','#EC4899','#1F2937']
 
-// ─── Avatar Ring ──────────────────────────────────────────────────────────────
-function StoryRing({ hasUnseen, count = 1, size = 58, active = false }) {
-  const color = active ? T.accent : hasUnseen ? T.accent : T.textMuted
+// ─── helper ───────────────────────────────────────────────────────────────────
+function timeSince(date) {
+  const s = Math.floor((Date.now() - date) / 1000)
+  if (s < 60) return 'Just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+// ─── Story Ring ───────────────────────────────────────────────────────────────
+function StoryRing({ hasUnseen, count = 1, size = 58 }) {
+  const color = hasUnseen ? T.accent : T.textMuted
   return (
     <View style={{
       width: size, height: size, borderRadius: size / 2,
       borderWidth: 2.5, borderColor: color,
       borderStyle: count > 1 ? 'dashed' : 'solid',
       alignItems: 'center', justifyContent: 'center',
-      opacity: hasUnseen || active ? 1 : 0.45,
+      opacity: hasUnseen ? 1 : 0.45,
     }} />
   )
 }
 
 // ─── Story Thumbnail ──────────────────────────────────────────────────────────
 function StoryThumb({ group, onPress, isMe, myPhoto }) {
-  const avatar = isMe
-    ? myPhoto
-    : group?.user?.photo?.url || group?.user?.profileImage || null
-  const name = isMe ? 'My Story' : group?.user?.name || ''
+  const avatar    = isMe ? myPhoto : group?.user?.photo?.url || group?.user?.profileImage || null
+  const name      = isMe ? 'My Story' : group?.user?.name || ''
   const hasUnseen = !isMe && group?.hasUnseen
 
   return (
@@ -94,21 +103,27 @@ function StoryThumb({ group, onPress, isMe, myPhoto }) {
   )
 }
 
-// ─── Story Viewer (full screen) ───────────────────────────────────────────────
+// ─── Story Viewer ─────────────────────────────────────────────────────────────
 function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDelete }) {
-  const [groupIdx, setGroupIdx]   = useState(startGroupIndex || 0)
-  const [storyIdx, setStoryIdx]   = useState(0)
-  const [paused, setPaused]       = useState(false)
+  const [groupIdx, setGroupIdx] = useState(startGroupIndex || 0)
+  const [storyIdx, setStoryIdx] = useState(0)
+  const [paused, setPaused]     = useState(false)
   const [replyText, setReplyText] = useState('')
-  const [sending, setSending]     = useState(false)
+  const [sending, setSending]   = useState(false)
   const [showViews, setShowViews] = useState(false)
   const progress = useRef(new Animated.Value(0)).current
   const timerRef = useRef(null)
   const insets   = useSafeAreaInsets()
 
-  // expo-video player — story change হলে source update হয়
+  // ── FIX: declare group/story/media BEFORE useVideoPlayer ──────────────────
+  const group   = groups[groupIdx]
+  const story   = group?.stories?.[storyIdx]
+  const media   = story?.media?.[0]           // ← এখন properly initialized
+  const isOwner = group?.user?._id?.toString() === myUserId
+
+  // expo-video — media এর পরে declare করা হচ্ছে, তাই error নেই
   const isVideoMedia = media?.type === 'video'
-  const videoPlayer = useVideoPlayer(
+  const videoPlayer  = useVideoPlayer(
     isVideoMedia ? { uri: media?.url } : null,
     (player) => { player.loop = false }
   )
@@ -119,7 +134,7 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
     try { paused ? videoPlayer.pause() : videoPlayer.play() } catch (_) {}
   }, [paused, isVideoMedia, videoPlayer])
 
-  // video progress + finish detection
+  // video progress + finish
   useEffect(() => {
     if (!videoPlayer || !isVideoMedia) return
     const interval = setInterval(() => {
@@ -136,11 +151,6 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoPlayer, isVideoMedia, groupIdx, storyIdx])
 
-  const group   = groups[groupIdx]
-  const story   = group?.stories?.[storyIdx]
-  const media   = story?.media?.[0]
-  const isOwner = group?.user?._id?.toString() === myUserId
-
   // mark viewed
   useEffect(() => {
     if (story?._id && !isOwner) {
@@ -153,28 +163,21 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
     progress.setValue(0)
     clearTimeout(timerRef.current)
     Animated.timing(progress, {
-      toValue: 1,
-      duration,
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished) goNext()
-    })
+      toValue: 1, duration, useNativeDriver: false,
+    }).start(({ finished }) => { if (finished) goNext() })
   }, [groupIdx, storyIdx])
 
   useEffect(() => {
     if (!visible || paused || !story) return
-    if (media?.type === 'video') return // video controls its own timer
+    if (media?.type === 'video') return
     startProgress()
-    return () => {
-      progress.stopAnimation()
-      clearTimeout(timerRef.current)
-    }
+    return () => { progress.stopAnimation(); clearTimeout(timerRef.current) }
   }, [visible, groupIdx, storyIdx, paused])
 
   const goNext = () => {
     progress.stopAnimation()
-    const group = groups[groupIdx]
-    if (storyIdx < group.stories.length - 1) {
+    const g = groups[groupIdx]
+    if (storyIdx < g.stories.length - 1) {
       setStoryIdx(storyIdx + 1)
     } else if (groupIdx < groups.length - 1) {
       setGroupIdx(groupIdx + 1)
@@ -204,9 +207,7 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
       setPaused(false)
     } catch (e) {
       Alert.alert('Error', e?.message || 'Failed to send reply')
-    } finally {
-      setSending(false)
-    }
+    } finally { setSending(false) }
   }
 
   const handleDelete = () => {
@@ -219,9 +220,7 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
             await deleteStory(story._id)
             onDelete?.()
             goNext()
-          } catch (e) {
-            Alert.alert('Error', e?.message)
-          }
+          } catch (e) { Alert.alert('Error', e?.message) }
         },
       },
     ])
@@ -231,14 +230,16 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
 
   // progress segments
   const segments = group.stories.map((_, i) => {
-    const isActive  = i === storyIdx
-    const isDone    = i < storyIdx
+    const isActive = i === storyIdx
+    const isDone   = i < storyIdx
     return (
       <View key={i} style={sv.segWrap}>
-        <View style={[sv.segBg]} />
+        <View style={sv.segBg} />
         <Animated.View
           style={[sv.segFill, {
-            width: isDone ? '100%' : isActive ? progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) : '0%',
+            width: isDone ? '100%'
+              : isActive ? progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] })
+              : '0%',
           }]}
         />
       </View>
@@ -262,8 +263,15 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
     }
     if (media.type === 'text') {
       return (
-        <View style={[sv.mediaFull, { backgroundColor: media.bgColor || T.accent, alignItems: 'center', justifyContent: 'center', padding: 32 }]}>
-          <Text style={{ color: media.textColor || '#fff', fontSize: media.fontSize || 26, fontWeight: '700', textAlign: 'center', lineHeight: 38 }}>
+        <View style={[sv.mediaFull, {
+          backgroundColor: media.bgColor || T.accent,
+          alignItems: 'center', justifyContent: 'center', padding: 32,
+        }]}>
+          <Text style={{
+            color: media.textColor || '#fff',
+            fontSize: media.fontSize || 26,
+            fontWeight: '700', textAlign: 'center', lineHeight: 38,
+          }}>
             {media.text}
           </Text>
         </View>
@@ -277,12 +285,10 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
       <View style={[sv.container, { paddingTop: insets.top }]}>
         <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-        {/* Media */}
         {renderMedia()}
 
-        {/* Gradient overlay top */}
+        {/* FIX: gradient overlays — RN এ background: 'linear-gradient' কাজ করে না */}
         <View style={sv.topGrad} pointerEvents="none" />
-        {/* Gradient overlay bottom */}
         <View style={sv.bottomGrad} pointerEvents="none" />
 
         {/* Progress bars */}
@@ -298,7 +304,9 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
             <View>
               <Text style={sv.headerName}>{group.user?.name}</Text>
               <Text style={sv.headerTime}>
-                {story.createdAt ? new Date(story.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                {story.createdAt
+                  ? new Date(story.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : ''}
               </Text>
             </View>
           </View>
@@ -314,18 +322,30 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
 
         {/* Tap zones */}
         <View style={sv.tapZones} pointerEvents="box-none">
-          <TouchableOpacity style={{ flex: 1 }} onPress={goPrev} onLongPress={() => setPaused(true)} onPressOut={() => setPaused(false)} activeOpacity={1} />
-          <TouchableOpacity style={{ flex: 1 }} onPress={goNext} onLongPress={() => setPaused(true)} onPressOut={() => setPaused(false)} activeOpacity={1} />
+          <TouchableOpacity
+            style={{ flex: 1 }} onPress={goPrev}
+            onLongPress={() => setPaused(true)}
+            onPressOut={() => setPaused(false)}
+            activeOpacity={1}
+          />
+          <TouchableOpacity
+            style={{ flex: 1 }} onPress={goNext}
+            onLongPress={() => setPaused(true)}
+            onPressOut={() => setPaused(false)}
+            activeOpacity={1}
+          />
         </View>
 
-        {/* Views indicator (for owner) or Reply box */}
         {isOwner ? (
           <TouchableOpacity style={sv.viewsBar} onPress={() => setShowViews(true)}>
             <Ionicons name="eye-outline" size={18} color="rgba(255,255,255,0.8)" />
             <Text style={sv.viewsText}>{story.views?.length || 0} views</Text>
           </TouchableOpacity>
         ) : (
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={sv.replyWrap}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={sv.replyWrap}
+          >
             <View style={sv.replyBox}>
               <TextInput
                 style={sv.replyInput}
@@ -337,7 +357,11 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
                 onBlur={() => setPaused(false)}
                 multiline
               />
-              <TouchableOpacity onPress={handleReply} style={sv.replySend} disabled={!replyText.trim() || sending}>
+              <TouchableOpacity
+                onPress={handleReply}
+                style={sv.replySend}
+                disabled={!replyText.trim() || sending}
+              >
                 {sending
                   ? <ActivityIndicator size="small" color={T.accent} />
                   : <Ionicons name="send" size={20} color={replyText.trim() ? T.accent : 'rgba(255,255,255,0.3)'} />
@@ -351,17 +375,16 @@ function StoryViewer({ visible, groups, startGroupIndex, myUserId, onClose, onDe
   )
 }
 
-// ─── Story Creator Modal ──────────────────────────────────────────────────────
+// ─── Story Creator ────────────────────────────────────────────────────────────
 function StoryCreator({ visible, onClose, onCreated }) {
-  const [mode, setMode]           = useState(null)   // 'image'|'video'|'text'
+  const [mode, setMode]           = useState(null)
   const [mediaFile, setMediaFile] = useState(null)
   const [text, setText]           = useState('')
   const [bgColor, setBgColor]     = useState(TEXT_BG_COLORS[0])
-  const [textColor, setTextColor] = useState('#FFFFFF')
+  const [textColor]               = useState('#FFFFFF')
   const [uploading, setUploading] = useState(false)
   const insets = useSafeAreaInsets()
 
-  // video preview player for StoryCreator
   const previewPlayer = useVideoPlayer(
     mode === 'video' && mediaFile ? { uri: mediaFile.uri } : null,
     (player) => { player.loop = true; player.play() }
@@ -400,11 +423,14 @@ function StoryCreator({ visible, onClose, onCreated }) {
         mediaPayload = [{ type: 'text', text: text.trim(), bgColor, textColor, fontSize: 26 }]
       } else if (mode === 'image' || mode === 'video') {
         if (!mediaFile) return
-        const result = await uploadToCloudinary({ uri: mediaFile.uri, type: mode === 'video' ? 'video' : 'image', name: 'story_' + Date.now(), mime: mediaFile.mimeType || (mode === 'video' ? 'video/mp4' : 'image/jpeg') })
+        const result = await uploadToCloudinary({
+          uri: mediaFile.uri,
+          type: mode === 'video' ? 'video' : 'image',
+          name: 'story_' + Date.now(),
+          mime: mediaFile.mimeType || (mode === 'video' ? 'video/mp4' : 'image/jpeg'),
+        })
         mediaPayload = [{
-          type: mode,
-          url: result.url,
-          public_id: result.public_id || '',
+          type: mode, url: result.url, public_id: result.public_id || '',
           thumb: '',
           width: result.width || mediaFile.width || null,
           height: result.height || mediaFile.height || null,
@@ -417,14 +443,11 @@ function StoryCreator({ visible, onClose, onCreated }) {
       onClose()
     } catch (e) {
       Alert.alert('Failed to post story', e?.message || 'Please try again')
-    } finally {
-      setUploading(false)
-    }
+    } finally { setUploading(false) }
   }
 
   if (!visible) return null
 
-  // Mode picker screen
   if (!mode) {
     return (
       <Modal visible animationType="slide" statusBarTranslucent>
@@ -468,13 +491,10 @@ function StoryCreator({ visible, onClose, onCreated }) {
     )
   }
 
-  // Preview / editor
   return (
     <Modal visible animationType="slide" statusBarTranslucent>
       <View style={{ flex: 1, backgroundColor: '#000', paddingTop: insets.top }}>
         <StatusBar barStyle="light-content" backgroundColor="#000" />
-
-        {/* Preview */}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           {mode === 'image' && mediaFile && (
             <Image source={{ uri: mediaFile.uri }} style={{ width: SCREEN_W, height: SCREEN_H * 0.75 }} resizeMode="contain" />
@@ -490,8 +510,6 @@ function StoryCreator({ visible, onClose, onCreated }) {
             </View>
           )}
         </View>
-
-        {/* Text input (for text stories) */}
         {mode === 'text' && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
             <TextInput
@@ -503,7 +521,6 @@ function StoryCreator({ visible, onClose, onCreated }) {
               multiline
               autoFocus
             />
-            {/* BG color picker */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
               {TEXT_BG_COLORS.map((c) => (
                 <TouchableOpacity
@@ -515,10 +532,8 @@ function StoryCreator({ visible, onClose, onCreated }) {
             </ScrollView>
           </View>
         )}
-
-        {/* Action row */}
         <View style={cr.actionRow}>
-          <TouchableOpacity onPress={() => { reset() }} style={cr.cancelBtn}>
+          <TouchableOpacity onPress={reset} style={cr.cancelBtn}>
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </TouchableOpacity>
           <TouchableOpacity onPress={handlePost} style={cr.postBtn} disabled={uploading}>
@@ -535,19 +550,18 @@ function StoryCreator({ visible, onClose, onCreated }) {
 
 // ─── Main Updates Screen ──────────────────────────────────────────────────────
 const Updates = () => {
-  const insets              = useSafeAreaInsets()
-  const { mongoUser }       = useAuth()
-  const [stories, setStories]           = useState([])
-  const [loading, setLoading]           = useState(true)
-  const [refreshing, setRefreshing]     = useState(false)
-  const [viewerVisible, setViewerVisible] = useState(false)
+  const insets        = useSafeAreaInsets()
+  const { mongoUser } = useAuth()
+  const [stories, setStories]               = useState([])
+  const [loading, setLoading]               = useState(true)
+  const [refreshing, setRefreshing]         = useState(false)
+  const [viewerVisible, setViewerVisible]   = useState(false)
   const [viewerStartGroup, setViewerStartGroup] = useState(0)
   const [creatorVisible, setCreatorVisible] = useState(false)
 
-  const myGroup = stories.find(g => g.user?._id?.toString() === mongoUser?._id?.toString())
+  const myGroup    = stories.find(g => g.user?._id?.toString() === mongoUser?._id?.toString())
   const otherGroups = stories.filter(g => g.user?._id?.toString() !== mongoUser?._id?.toString())
-  // all groups for viewer: self first
-  const allGroups = myGroup ? [myGroup, ...otherGroups] : otherGroups
+  const allGroups  = myGroup ? [myGroup, ...otherGroups] : otherGroups
 
   const fetchStories = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -564,7 +578,6 @@ const Updates = () => {
 
   useEffect(() => { fetchStories() }, [])
 
-  // real-time: new_story event
   useEffect(() => {
     const socket = getSocket()
     if (!socket) return
@@ -591,17 +604,14 @@ const Updates = () => {
     <View style={[s.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" backgroundColor={T.surface} />
 
-      {/* Header */}
       <View style={s.header}>
         <View style={s.headerLeft}>
           <View style={s.headerAccent} />
           <Text style={s.headerTitle}>Stories</Text>
         </View>
-        <View style={s.headerIcons}>
-          <TouchableOpacity style={s.iconBtn} onPress={() => fetchStories()}>
-            <Ionicons name="refresh-outline" size={22} color={T.textSecond} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={s.iconBtn} onPress={() => fetchStories()}>
+          <Ionicons name="refresh-outline" size={22} color={T.textSecond} />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -612,23 +622,28 @@ const Updates = () => {
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: 90 }}
-          refreshing={refreshing}
-          onScrollBeginDrag={() => {}}
+          refreshControl={
+            <ScrollView
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); fetchStories() }}
+            />
+          }
         >
-          {/* Stories horizontal scroll */}
           <View style={s.sectionHeader}>
             <Text style={s.sectionTitle}>Recent Stories</Text>
           </View>
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, gap: 12, paddingVertical: 8 }}>
-            {/* My Story */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 12, gap: 12, paddingVertical: 8 }}
+          >
             <StoryThumb
               isMe
               group={myGroup}
               myPhoto={mongoUser?.photo?.url || mongoUser?.profileImage}
               onPress={openMyStory}
             />
-            {/* Others */}
             {otherGroups.map((group, i) => (
               <StoryThumb
                 key={group.user?._id}
@@ -641,7 +656,6 @@ const Updates = () => {
             ))}
           </ScrollView>
 
-          {/* Empty state */}
           {allGroups.length === 0 && (
             <View style={s.emptyWrap}>
               <Ionicons name="images-outline" size={56} color={T.textMuted} />
@@ -654,20 +668,17 @@ const Updates = () => {
             </View>
           )}
 
-          {/* List view of stories */}
           {allGroups.length > 0 && (
             <View>
               <View style={s.sectionHeader}>
                 <Text style={s.sectionTitle}>All Updates</Text>
               </View>
               {allGroups.map((group, i) => {
-                const isMe = group.user?._id?.toString() === mongoUser?._id?.toString()
-                const avatar = group.user?.photo?.url || group.user?.profileImage
+                const isMe      = group.user?._id?.toString() === mongoUser?._id?.toString()
+                const avatar    = group.user?.photo?.url || group.user?.profileImage
                 const lastStory = group.stories?.[group.stories.length - 1]
                 const firstMedia = lastStory?.media?.[0]
-                const timeAgo = lastStory?.createdAt
-                  ? timeSince(new Date(lastStory.createdAt))
-                  : ''
+                const timeAgo   = lastStory?.createdAt ? timeSince(new Date(lastStory.createdAt)) : ''
                 return (
                   <TouchableOpacity
                     key={group.user?._id}
@@ -682,16 +693,17 @@ const Updates = () => {
                       <StoryRing hasUnseen={!isMe && group.hasUnseen} count={group.stories?.length || 0} size={54} />
                       {avatar
                         ? <Image source={{ uri: avatar }} style={s.avatar} />
-                        : <View style={[s.avatar, { backgroundColor: T.surfaceHigh, alignItems:'center', justifyContent:'center' }]}>
+                        : <View style={[s.avatar, { backgroundColor: T.surfaceHigh, alignItems: 'center', justifyContent: 'center' }]}>
                             <Ionicons name="person" size={20} color={T.textSecond} />
                           </View>
                       }
                     </View>
                     <View style={s.statusInfo}>
                       <Text style={s.statusName}>{isMe ? 'My Story' : group.user?.name}</Text>
-                      <Text style={s.statusTime}>{timeAgo} · {group.stories?.length} {group.stories?.length === 1 ? 'update' : 'updates'}</Text>
+                      <Text style={s.statusTime}>
+                        {timeAgo} · {group.stories?.length} {group.stories?.length === 1 ? 'update' : 'updates'}
+                      </Text>
                     </View>
-                    {/* Thumbnail preview */}
                     {firstMedia?.url && (
                       <Image source={{ uri: firstMedia.url }} style={s.previewThumb} />
                     )}
@@ -700,7 +712,7 @@ const Updates = () => {
                         <Ionicons name="text" size={16} color="#fff" />
                       </View>
                     )}
-                    {(!firstMedia?.url && firstMedia?.type !== 'text') && (
+                    {!firstMedia?.url && firstMedia?.type !== 'text' && (
                       <View style={[s.previewThumb, { backgroundColor: T.surfaceHigh }]} />
                     )}
                     {!isMe && group.hasUnseen && <View style={s.unreadDot} />}
@@ -713,12 +725,15 @@ const Updates = () => {
       )}
 
       {/* FAB */}
-      <TouchableOpacity style={[s.fab, { bottom: 24 }]} activeOpacity={0.85} onPress={() => setCreatorVisible(true)}>
+      <TouchableOpacity
+        style={[s.fab, { bottom: 24 }]}
+        activeOpacity={0.85}
+        onPress={() => setCreatorVisible(true)}
+      >
         <View style={s.fabGlow} />
         <Ionicons name="camera" size={24} color={T.bg} />
       </TouchableOpacity>
 
-      {/* Story Viewer */}
       <StoryViewer
         visible={viewerVisible}
         groups={allGroups}
@@ -728,7 +743,6 @@ const Updates = () => {
         onDelete={() => fetchStories(true)}
       />
 
-      {/* Story Creator */}
       <StoryCreator
         visible={creatorVisible}
         onClose={() => setCreatorVisible(false)}
@@ -739,17 +753,6 @@ const Updates = () => {
 }
 
 export default Updates
-
-// ─── Helper: time since ───────────────────────────────────────────────────────
-function timeSince(date) {
-  const s = Math.floor((Date.now() - date) / 1000)
-  if (s < 60) return 'Just now'
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
@@ -763,16 +766,15 @@ const s = StyleSheet.create({
   headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerAccent: { width: 4, height: 22, borderRadius: 2, backgroundColor: T.accent },
   headerTitle:  { fontSize: 22, fontWeight: '800', color: T.textPrimary },
-  headerIcons:  { flexDirection: 'row', gap: 4 },
   iconBtn:      { padding: 7 },
-  sectionHeader: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 6 },
-  sectionTitle: { fontSize: 11, fontWeight: '700', color: T.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
 
-  // story thumb (horizontal)
-  storyThumb: { alignItems: 'center', width: 72 },
-  storyRingWrap: { width: 62, height: 62, alignItems: 'center', justifyContent: 'center', marginBottom: 5 },
-  storyAvatar: { width: 54, height: 54, borderRadius: 27, position: 'absolute' },
-  storyName: { fontSize: 11, color: T.textSecond, textAlign: 'center', maxWidth: 68 },
+  sectionHeader: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 6 },
+  sectionTitle:  { fontSize: 11, fontWeight: '700', color: T.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
+
+  storyThumb:   { alignItems: 'center', width: 72 },
+  storyRingWrap:{ width: 62, height: 62, alignItems: 'center', justifyContent: 'center', marginBottom: 5 },
+  storyAvatar:  { width: 54, height: 54, borderRadius: 27, position: 'absolute' },
+  storyName:    { fontSize: 11, color: T.textSecond, textAlign: 'center', maxWidth: 68 },
   addBadge: {
     position: 'absolute', bottom: -2, right: -2,
     width: 22, height: 22, borderRadius: 11,
@@ -781,20 +783,18 @@ const s = StyleSheet.create({
     borderWidth: 2, borderColor: T.bg,
   },
 
-  // list item
-  statusItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10 },
-  avatarWrap: { position: 'relative', width: 58, height: 58, alignItems: 'center', justifyContent: 'center' },
-  avatar:     { width: 50, height: 50, borderRadius: 25, position: 'absolute', backgroundColor: T.surfaceHigh },
-  statusInfo: { flex: 1, marginLeft: 13, gap: 3 },
-  statusName: { fontSize: 15, fontWeight: '600', color: T.textPrimary },
-  statusTime: { fontSize: 12, color: T.textSecond },
-  unreadDot:  { width: 8, height: 8, borderRadius: 4, backgroundColor: T.accent },
-  previewThumb: { width: 46, height: 46, borderRadius: 8, marginLeft: 8, backgroundColor: T.surfaceHigh },
+  statusItem:  { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10 },
+  avatarWrap:  { position: 'relative', width: 58, height: 58, alignItems: 'center', justifyContent: 'center' },
+  avatar:      { width: 50, height: 50, borderRadius: 25, position: 'absolute', backgroundColor: T.surfaceHigh },
+  statusInfo:  { flex: 1, marginLeft: 13, gap: 3 },
+  statusName:  { fontSize: 15, fontWeight: '600', color: T.textPrimary },
+  statusTime:  { fontSize: 12, color: T.textSecond },
+  unreadDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: T.accent },
+  previewThumb:{ width: 46, height: 46, borderRadius: 8, marginLeft: 8, backgroundColor: T.surfaceHigh },
 
-  // empty state
-  emptyWrap: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 32 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: T.textPrimary, marginTop: 16 },
-  emptySub:   { fontSize: 13, color: T.textSecond, textAlign: 'center', marginTop: 8, lineHeight: 20 },
+  emptyWrap:    { alignItems: 'center', paddingTop: 60, paddingHorizontal: 32 },
+  emptyTitle:   { fontSize: 18, fontWeight: '700', color: T.textPrimary, marginTop: 16 },
+  emptySub:     { fontSize: 13, color: T.textSecond, textAlign: 'center', marginTop: 8, lineHeight: 20 },
   addStoryBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: T.accent, paddingHorizontal: 20, paddingVertical: 12,
@@ -802,7 +802,6 @@ const s = StyleSheet.create({
   },
   addStoryText: { color: T.bg, fontWeight: '700', fontSize: 15 },
 
-  // FAB
   fab: {
     position: 'absolute', right: 20,
     width: 58, height: 58, borderRadius: 29,
@@ -821,16 +820,21 @@ const s = StyleSheet.create({
 const sv = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   mediaFull: { position: 'absolute', width: SCREEN_W, height: SCREEN_H, top: 0, left: 0 },
+
+  // FIX: React Native তে CSS linear-gradient কাজ করে না
+  // opacity-based dark overlay দিয়ে replace করা হয়েছে
   topGrad: {
-    position: 'absolute', top: 0, left: 0, right: 0, height: 200,
-    background: 'linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)',
-    backgroundColor: 'transparent',
-    // React Native workaround: use a semi-transparent view
+    position: 'absolute', top: 0, left: 0, right: 0, height: 180,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    // fade effect: top heavily dark, fades down
+    opacity: 0.85,
   },
   bottomGrad: {
-    position: 'absolute', bottom: 0, left: 0, right: 0, height: 200,
-    backgroundColor: 'transparent',
+    position: 'absolute', bottom: 0, left: 0, right: 0, height: 180,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    opacity: 0.8,
   },
+
   progressRow: {
     position: 'absolute', top: 10, left: 8, right: 8,
     flexDirection: 'row', gap: 3, zIndex: 10,
@@ -838,14 +842,16 @@ const sv = StyleSheet.create({
   segWrap: { flex: 1, height: 2.5, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, overflow: 'hidden' },
   segBg:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.3)' },
   segFill: { height: '100%', backgroundColor: '#fff', borderRadius: 2 },
+
   header: {
     position: 'absolute', top: 26, left: 10, right: 10,
     flexDirection: 'row', alignItems: 'center', zIndex: 10,
   },
   headerAvatar: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: '#fff' },
-  headerName: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  headerTime: { color: 'rgba(255,255,255,0.65)', fontSize: 11 },
-  tapZones: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 100, flexDirection: 'row', zIndex: 5 },
+  headerName:   { color: '#fff', fontSize: 14, fontWeight: '700' },
+  headerTime:   { color: 'rgba(255,255,255,0.65)', fontSize: 11 },
+
+  tapZones:  { position: 'absolute', top: 0, left: 0, right: 0, bottom: 100, flexDirection: 'row', zIndex: 5 },
   replyWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10 },
   replyBox: {
     flexDirection: 'row', alignItems: 'center',
@@ -855,7 +861,7 @@ const sv = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
   },
   replyInput: { flex: 1, color: '#fff', fontSize: 14, maxHeight: 80 },
-  replySend: { padding: 6 },
+  replySend:  { padding: 6 },
   viewsBar: {
     position: 'absolute', bottom: 24, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, zIndex: 10,
@@ -880,14 +886,14 @@ const cr = StyleSheet.create({
     backgroundColor: T.surface, borderRadius: 20, paddingVertical: 28,
     borderWidth: 1, borderColor: T.border,
   },
-  optionIcon: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  optionIcon:  { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   optionLabel: { fontSize: 15, fontWeight: '700', color: T.textPrimary },
   textInput: {
     backgroundColor: 'rgba(255,255,255,0.1)', color: '#fff',
     borderRadius: 14, padding: 14, fontSize: 16, minHeight: 80,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
-  colorDot: { width: 32, height: 32, borderRadius: 16, marginRight: 8 },
+  colorDot:  { width: 32, height: 32, borderRadius: 16, marginRight: 8 },
   actionRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 14,
