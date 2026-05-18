@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, Animated, StatusBar,
@@ -7,8 +6,11 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { getSocket } from '../services/socket'
 import { useCall } from '../context/CallContext'
+import { stopRingtone } from '../services/sounds'
 
 const T = { bg: '#0D1117', accent: '#2DD4BF', red: '#F87171', text: '#F0F6FC', sub: '#7D8590' }
+
+const safeStop = () => { try { stopRingtone() } catch (_) {} }
 
 export default function IncomingCallScreen() {
   const router = useRouter()
@@ -24,19 +26,21 @@ export default function IncomingCallScreen() {
     ).start()
   }, [])
 
-  // If call gets canceled/timed out remotely, go back
+  // Call canceled / timed out / rejected remotely → ringtone বন্ধ করে ফিরে যাও
   useEffect(() => {
     if (state.phase !== 'incoming') {
+      safeStop()
       try { router.back() } catch (_) {}
     }
   }, [state.phase])
 
   if (!state.callId) return null
 
-  const { callId, type, peer, channelName } = state
+  const { callId, type, peer } = state
   const isVideo = type === 'video'
 
   const handleAccept = () => {
+    safeStop()  // ← call ধরলে ringtone বন্ধ
     const socket = getSocket()
     socket?.emit('call:accept', { callId }, (ack) => {
       if (!ack?.ok) { dispatch({ type: 'RESET' }); router.back(); return }
@@ -45,13 +49,13 @@ export default function IncomingCallScreen() {
         params: {
           callId,
           channelName: ack.channelName,
-          type: ack.type,
-          token: ack.token,
-          uid: String(ack.uid),
-          appId: ack.appId,
-          peerName: peer?.name || '',
-          peerAvatar: peer?.avatar || '',
-          outgoing: '0',
+          type:        ack.type,
+          token:       ack.token,
+          uid:         String(ack.uid),
+          appId:       ack.appId,
+          peerName:    peer?.name   || '',
+          peerAvatar:  peer?.avatar || '',
+          outgoing:    '0',
         },
       })
       dispatch({ type: 'ACTIVE' })
@@ -59,6 +63,7 @@ export default function IncomingCallScreen() {
   }
 
   const handleReject = () => {
+    safeStop()  // ← reject করলে ringtone বন্ধ
     getSocket()?.emit('call:reject', { callId })
     dispatch({ type: 'RESET' })
     try { router.back() } catch (_) {}
@@ -102,18 +107,18 @@ export default function IncomingCallScreen() {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: T.bg, alignItems: 'center', justifyContent: 'space-between', paddingVertical: 70 },
-  top: { alignItems: 'center', gap: 6 },
-  callType: { color: T.accent, fontSize: 16, fontWeight: '700', letterSpacing: 1 },
-  subtitle: { color: T.sub, fontSize: 14, letterSpacing: 1.5 },
-  avatar: { width: 160, height: 160, borderRadius: 80, borderWidth: 3, borderColor: T.accent },
+  root:         { flex: 1, backgroundColor: T.bg, alignItems: 'center', justifyContent: 'space-between', paddingVertical: 70 },
+  top:          { alignItems: 'center', gap: 6 },
+  callType:     { color: T.accent, fontSize: 16, fontWeight: '700', letterSpacing: 1 },
+  subtitle:     { color: T.sub, fontSize: 14, letterSpacing: 1.5 },
+  avatar:       { width: 160, height: 160, borderRadius: 80, borderWidth: 3, borderColor: T.accent },
   avatarFallback: { backgroundColor: T.accent + '33', alignItems: 'center', justifyContent: 'center' },
-  avatarTxt: { color: T.accent, fontSize: 60, fontWeight: '800' },
-  name: { color: T.text, fontSize: 28, fontWeight: '700', marginTop: 20 },
-  actions: { flexDirection: 'row', gap: 70 },
-  actionItem: { alignItems: 'center', gap: 10 },
-  actionBtn: { width: 70, height: 70, borderRadius: 35, alignItems: 'center', justifyContent: 'center' },
-  accept: { backgroundColor: '#22C55E' },
-  reject: { backgroundColor: T.red },
-  actionLabel: { color: T.sub, fontSize: 13, fontWeight: '600' },
+  avatarTxt:    { color: T.accent, fontSize: 60, fontWeight: '800' },
+  name:         { color: T.text, fontSize: 28, fontWeight: '700', marginTop: 20 },
+  actions:      { flexDirection: 'row', gap: 70 },
+  actionItem:   { alignItems: 'center', gap: 10 },
+  actionBtn:    { width: 70, height: 70, borderRadius: 35, alignItems: 'center', justifyContent: 'center' },
+  accept:       { backgroundColor: '#22C55E' },
+  reject:       { backgroundColor: T.red },
+  actionLabel:  { color: T.sub, fontSize: 13, fontWeight: '600' },
 })

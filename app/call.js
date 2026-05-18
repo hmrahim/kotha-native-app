@@ -11,6 +11,7 @@ import {
 } from '../services/agora'
 import { getSocket } from '../services/socket'
 import { useCall } from '../context/CallContext'
+import { startRingback, stopRingback } from '../services/sounds'
 
 const T = {
   bg: '#0D1117', surface: '#161B22', accent: '#2DD4BF',
@@ -38,6 +39,12 @@ export default function CallScreen() {
 
   useEffect(() => {
     let mounted = true
+
+    // caller screen খুললে ringback tone বাজাও (callee ধরার আগ পর্যন্ত)
+    if (outgoing === '1') {
+      try { startRingback() } catch (_) {}
+    }
+
     ;(async () => {
       const ok = await requestCallPermissions(isVideo ? 'video' : 'voice')
       if (!ok) { router.back(); return }
@@ -48,6 +55,7 @@ export default function CallScreen() {
         onJoinChannelSuccess: () => { joinedRef.current = true },
         onUserJoined: (_c, rUid) => {
           if (!mounted) return
+          try { stopRingback() } catch (_) {}  // ← callee ধরল, ringback বন্ধ
           setRemoteUid(rUid)
           setCallConnected(true)
           if (!timerRef.current) {
@@ -67,16 +75,15 @@ export default function CallScreen() {
     const socket = getSocket()
     const onEnd = () => handleEnd(true)
     socket?.on('call:ended', onEnd)
-    socket?.on('call:rejected', onEnd)   // callee প্রত্যাখ্যান করলে
-    socket?.on('call:canceled', onEnd)   // caller cancel করলে
-    socket?.on('call:timeout', onEnd)    // কেউ ধরেনি, timeout হলে
+    socket?.on('call:rejected', onEnd)
+    socket?.on('call:canceled', onEnd)
 
     return () => {
       mounted = false
+      try { stopRingback() } catch (_) {}  // ← screen বন্ধ হলে ringback বন্ধ
       socket?.off('call:ended', onEnd)
       socket?.off('call:rejected', onEnd)
       socket?.off('call:canceled', onEnd)
-      socket?.off('call:timeout', onEnd)
       if (timerRef.current) clearInterval(timerRef.current)
       leaveChannel()
     }

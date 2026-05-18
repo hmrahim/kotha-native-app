@@ -1,61 +1,129 @@
-import React, { useRef, useEffect } from 'react'
+// app/(tab)/calls.js
+// ──────────────────────────────────────────────────────────────────────────────
+// পুরোনো calls.js এর পরিবর্তে এই ফাইলটা ব্যবহার করো
+// Shows: call history (recent calls) + ability to start new calls
+// ──────────────────────────────────────────────────────────────────────────────
+
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import {
-  View, Text, StyleSheet, Animated,
-  TouchableOpacity, StatusBar, Dimensions,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  StatusBar, Animated, Image, Pressable,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { T } from '../../theme'
+import { useRouter } from 'expo-router'
+import { T, getColor, getInitials } from '../../theme'
+import { useAuth } from '../../context/AuthContext'
+import { getSocket } from '../../services/socket'
 
-const { width: W } = Dimensions.get('window')
+// ─── Dummy recent calls data (replace with real API call later) ───────────────
+const MOCK_CALLS = []
 
-const FEATURES = [
-  {
-    icon: 'call',
-    color: T.accent,
-    dim: T.accentDim,
-    title: 'Voice Call',
-    desc: 'HD quality voice call যেকোনো সময়',
-  },
-  {
-    icon: 'videocam',
-    color: '#A78BFA',
-    dim: 'rgba(167,139,250,0.12)',
-    title: 'Video Call',
-    desc: 'Face-to-face কথা বলো যেকোনো জায়গা থেকে',
-  },
-  {
-    icon: 'people',
-    color: T.amber,
-    dim: T.amberDim,
-    title: 'Group Call',
-    desc: 'একসাথে অনেকজনের সাথে কথা বলো',
-  },
-  {
-    icon: 'shield-checkmark',
-    color: '#34D399',
-    dim: 'rgba(52,211,153,0.12)',
-    title: 'End-to-End Encrypted',
-    desc: 'তোমার call সম্পূর্ণ নিরাপদ ও private',
-  },
-]
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+function Avatar({ name, avatar, size = 48 }) {
+  const bg = getColor(name || 'U')
+  const initials = getInitials(name || 'U')
 
-// ── Animated ring ─────────────────────────────────────────────────────────────
-function PulseRing({ delay, size, color }) {
+  if (avatar) {
+    return (
+      <Image
+        source={{ uri: avatar }}
+        style={{ width: size, height: size, borderRadius: size / 2 }}
+      />
+    )
+  }
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: bg + '33', alignItems: 'center', justifyContent: 'center',
+      borderWidth: 1.5, borderColor: bg + '55',
+    }}>
+      <Text style={{ fontSize: size * 0.35, fontWeight: '700', color: bg }}>
+        {initials}
+      </Text>
+    </View>
+  )
+}
+
+// ─── Call Log Item ─────────────────────────────────────────────────────────────
+function CallItem({ item, onCall }) {
+  const isIncoming = item.direction === 'incoming'
+  const isMissed   = item.status === 'missed'
+
+  return (
+    <Pressable
+      style={({ pressed }) => [ci.row, pressed && { opacity: 0.7 }]}
+      android_ripple={{ color: 'rgba(255,255,255,0.04)' }}
+    >
+      <Avatar name={item.name} avatar={item.avatar} size={50} />
+
+      <View style={ci.info}>
+        <Text style={[ci.name, isMissed && { color: '#F87171' }]}>
+          {item.name}
+        </Text>
+        <View style={ci.meta}>
+          <Ionicons
+            name={isIncoming ? 'call-outline' : 'call-outline'}
+            size={12}
+            color={isMissed ? '#F87171' : T.textSecond}
+            style={{ transform: [{ rotate: isIncoming ? '135deg' : '-45deg' }] }}
+          />
+          <Text style={[ci.sub, isMissed && { color: '#F87171' }]}>
+            {isMissed ? 'Missed' : isIncoming ? 'Incoming' : 'Outgoing'} · {item.time}
+          </Text>
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={ci.callBtn}
+        onPress={() => onCall(item, 'audio')}
+        hitSlop={8}
+      >
+        <Ionicons name="call" size={18} color={T.accent} />
+      </TouchableOpacity>
+    </Pressable>
+  )
+}
+
+// ─── Empty State ───────────────────────────────────────────────────────────────
+function EmptyState() {
+  const fadeAnim  = useRef(new Animated.Value(0)).current
+  const slideAnim = useRef(new Animated.Value(20)).current
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim,  { toValue: 1, duration: 500, delay: 200, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 500, delay: 200, useNativeDriver: true }),
+    ]).start()
+  }, [])
+
+  return (
+    <Animated.View style={[es.wrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+      <View style={es.iconWrap}>
+        <PulseRing delay={0}    size={120} />
+        <PulseRing delay={600}  size={120} />
+        <PulseRing delay={1200} size={120} />
+        <View style={es.icon}>
+          <Ionicons name="call" size={38} color={T.accent} />
+        </View>
+      </View>
+      <Text style={es.title}>কোনো call নেই এখনো</Text>
+      <Text style={es.desc}>
+        Chats থেকে কাউকে call করো{'\n'}এখানে call history দেখাবে
+      </Text>
+    </Animated.View>
+  )
+}
+
+function PulseRing({ delay, size }) {
   const anim = useRef(new Animated.Value(0)).current
 
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
-        Animated.timing(anim, {
-          toValue: 1, duration: 2000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(anim, {
-          toValue: 0, duration: 0,
-          useNativeDriver: true,
-        }),
+        Animated.timing(anim, { toValue: 1, duration: 2000, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0, duration: 0,    useNativeDriver: true }),
       ])
     )
     loop.start()
@@ -67,71 +135,61 @@ function PulseRing({ delay, size, color }) {
       pointerEvents="none"
       style={{
         position: 'absolute',
-        width: size, height: size,
-        borderRadius: size / 2,
-        borderWidth: 1.5,
-        borderColor: color,
-        opacity: anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.6, 0.3, 0] }),
-        transform: [{
-          scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] }),
-        }],
+        width: size, height: size, borderRadius: size / 2,
+        borderWidth: 1, borderColor: T.accent,
+        opacity: anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.5, 0.2, 0] }),
+        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.7] }) }],
       }}
     />
   )
 }
 
-// ── Feature card ──────────────────────────────────────────────────────────────
-function FeatureCard({ item, index }) {
-  const fadeAnim = useRef(new Animated.Value(0)).current
-  const slideAnim = useRef(new Animated.Value(24)).current
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1, duration: 400,
-        delay: 600 + index * 120,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0, duration: 400,
-        delay: 600 + index * 120,
-        useNativeDriver: true,
-      }),
-    ]).start()
-  }, [])
-
-  return (
-    <Animated.View style={[
-      fc.card,
-      { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-    ]}>
-      <View style={[fc.iconWrap, { backgroundColor: item.dim }]}>
-        <Ionicons name={item.icon} size={20} color={item.color} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={fc.title}>{item.title}</Text>
-        <Text style={fc.desc}>{item.desc}</Text>
-      </View>
-      <View style={[fc.soon, { borderColor: item.color + '40' }]}>
-        <Text style={[fc.soonText, { color: item.color }]}>Soon</Text>
-      </View>
-    </Animated.View>
-  )
-}
-
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ─── Main Screen ───────────────────────────────────────────────────────────────
 export default function CallsScreen() {
-  const insets = useSafeAreaInsets()
+  const insets       = useSafeAreaInsets()
+  const router       = useRouter()
+  const { mongoUser } = useAuth()
+  const [calls, setCalls] = useState(MOCK_CALLS)
 
-  const heroFade  = useRef(new Animated.Value(0)).current
-  const heroSlide = useRef(new Animated.Value(30)).current
-
+  // Socket থেকে incoming call listen করো
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(heroFade,  { toValue: 1, duration: 500, delay: 100, useNativeDriver: true }),
-      Animated.timing(heroSlide, { toValue: 0, duration: 500, delay: 100, useNativeDriver: true }),
-    ]).start()
+    const socket = getSocket()
+    if (!socket) return
+
+    const handleIncomingCall = (data) => {
+      // Incoming call screen এ navigate করো
+      router.push({
+        pathname: '/call-screen',
+        params: {
+          callerId:     data.callerId,
+          callerName:   data.callerName,
+          callerAvatar: data.callerAvatar || '',
+          callType:     data.callType || 'audio',
+          channelName:  data.channelName,
+          mode:         'incoming',
+        },
+      })
+    }
+
+    socket.on('incoming_call', handleIncomingCall)
+    return () => socket.off('incoming_call', handleIncomingCall)
   }, [])
+
+  const handleStartCall = useCallback((user, callType) => {
+    if (!user) return
+    const channelName = `${mongoUser?._id}_${user.id}_${Date.now()}`
+    router.push({
+      pathname: '/call-screen',
+      params: {
+        receiverId:    user.id,
+        receiverName:  user.name,
+        receiverAvatar: user.avatar || '',
+        callType,
+        channelName,
+        mode: 'outgoing',
+      },
+    })
+  }, [mongoUser, router])
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
@@ -140,57 +198,35 @@ export default function CallsScreen() {
       {/* Header */}
       <View style={s.header}>
         <View style={s.headerLeft}>
-          <View style={s.headerAccent} />
+          <View style={s.accent} />
           <Text style={s.headerTitle}>Calls</Text>
         </View>
+        <TouchableOpacity style={s.newCallBtn}>
+          <Ionicons name="call" size={18} color={T.accent} />
+        </TouchableOpacity>
       </View>
 
-      <View style={s.body}>
-
-        {/* Hero icon with pulse rings */}
-        <Animated.View style={[s.heroWrap, {
-          opacity: heroFade,
-          transform: [{ translateY: heroSlide }],
-        }]}>
-          <View style={s.ringContainer}>
-            <PulseRing delay={0}    size={160} color={T.accent} />
-            <PulseRing delay={700}  size={160} color={T.accent} />
-            <PulseRing delay={1400} size={160} color={T.accent} />
-            <View style={s.heroIcon}>
-              <Ionicons name="call" size={52} color={T.accent} />
-            </View>
-          </View>
-
-          <Text style={s.heroTitle}>Call Feature</Text>
-          <Text style={s.heroSub}>শীঘ্রই আসছে</Text>
-          <Text style={s.heroDesc}>
-            আমরা তোমার জন্য একটি দারুণ calling experience তৈরি করছি।
-            {'\n'}একটু অপেক্ষা করো! 🚀
-          </Text>
-        </Animated.View>
-
-        {/* Divider */}
-        <View style={s.dividerRow}>
-          <View style={s.dividerLine} />
-          <Text style={s.dividerText}>আসছে যা যা</Text>
-          <View style={s.dividerLine} />
-        </View>
-
-        {/* Feature cards */}
-        <View style={s.featureList}>
-          {FEATURES.map((item, i) => (
-            <FeatureCard key={item.title} item={item} index={i} />
-          ))}
-        </View>
-
-      </View>
+      {/* Content */}
+      {calls.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <FlatList
+          data={calls}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <CallItem item={item} onCall={handleStartCall} />
+          )}
+          contentContainerStyle={{ paddingVertical: 8 }}
+          ItemSeparatorComponent={() => <View style={s.separator} />}
+        />
+      )}
     </View>
   )
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ─── Styles ────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root:   { flex: 1, backgroundColor: T.bg },
+  root: { flex: 1, backgroundColor: T.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 14,
@@ -198,65 +234,50 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: T.border,
   },
   headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerAccent: { width: 4, height: 22, borderRadius: 2, backgroundColor: T.accent },
+  accent:       { width: 4, height: 22, borderRadius: 2, backgroundColor: T.accent },
   headerTitle:  { fontSize: 22, fontWeight: '800', color: T.textPrimary },
-
-  body: { flex: 1, paddingHorizontal: 20, paddingTop: 32, paddingBottom: 24 },
-
-  // Hero
-  heroWrap: { alignItems: 'center', marginBottom: 36 },
-  ringContainer: {
-    width: 160, height: 160,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 28,
-  },
-  heroIcon: {
-    width: 100, height: 100, borderRadius: 50,
+  newCallBtn: {
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: T.accentDim,
-    borderWidth: 1.5, borderColor: 'rgba(45,212,191,0.25)',
     alignItems: 'center', justifyContent: 'center',
   },
-  heroTitle: {
-    fontSize: 26, fontWeight: '900', color: T.textPrimary,
-    letterSpacing: 0.5, marginBottom: 6,
-  },
-  heroSub: {
-    fontSize: 13, fontWeight: '700', color: T.accent,
-    letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 14,
-  },
-  heroDesc: {
-    fontSize: 14, color: T.textSecond, textAlign: 'center',
-    lineHeight: 22, paddingHorizontal: 10,
-  },
-
-  // Divider
-  dividerRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16,
-  },
-  dividerLine: { flex: 1, height: 1, backgroundColor: T.border },
-  dividerText: {
-    fontSize: 11, fontWeight: '700', color: T.textMuted,
-    textTransform: 'uppercase', letterSpacing: 1.2,
-  },
-
-  featureList: { gap: 10 },
+  separator: { height: 1, backgroundColor: T.border, marginLeft: 78 },
 })
 
-const fc = StyleSheet.create({
-  card: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: T.surface, borderRadius: 16, padding: 14,
-    borderWidth: 1, borderColor: T.border,
+const ci = StyleSheet.create({
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 12, gap: 14,
   },
-  iconWrap: {
-    width: 40, height: 40, borderRadius: 12,
+  info:   { flex: 1 },
+  name:   { fontSize: 15, fontWeight: '600', color: T.textPrimary, marginBottom: 3 },
+  meta:   { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  sub:    { fontSize: 12, color: T.textSecond },
+  callBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: T.accentDim,
     alignItems: 'center', justifyContent: 'center',
   },
-  title: { fontSize: 14, fontWeight: '700', color: T.textPrimary, marginBottom: 2 },
-  desc:  { fontSize: 12, color: T.textSecond, lineHeight: 17 },
-  soon: {
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: 8, borderWidth: 1,
+})
+
+const es = StyleSheet.create({
+  wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 },
+  iconWrap: {
+    width: 120, height: 120,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 32,
   },
-  soonText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  icon: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: T.accentDim,
+    borderWidth: 1.5, borderColor: 'rgba(45,212,191,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  title: {
+    fontSize: 20, fontWeight: '800', color: T.textPrimary,
+    marginBottom: 10, letterSpacing: 0.3,
+  },
+  desc: {
+    fontSize: 14, color: T.textSecond,
+    textAlign: 'center', lineHeight: 22,
+  },
 })
