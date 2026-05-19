@@ -1,22 +1,41 @@
-const { getDefaultConfig } = require("expo/metro-config");
-const { withNativeWind } = require('nativewind/metro');
+// metro.config.js
+const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
-const originalResolveRequest = config.resolver.resolveRequest;
-
+// Web এ notifee এবং firebase/messaging mock করা হচ্ছে
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (platform === 'web' && moduleName === 'react-native-agora') {
-    return {
-      filePath: path.resolve(__dirname, 'mocks/agora-mock.js'),
-      type: 'sourceFile',
-    };
+  if (platform === 'web') {
+    if (
+      moduleName === '@notifee/react-native' ||
+      moduleName.startsWith('@notifee/react-native/')
+    ) {
+      return {
+        filePath: path.resolve(__dirname, 'notifee.web.js'),
+        type: 'sourceFile',
+      };
+    }
+
+    if (
+      moduleName === '@react-native-firebase/messaging' ||
+      moduleName.startsWith('@react-native-firebase/messaging/')
+    ) {
+      return {
+        filePath: path.resolve(__dirname, 'firebase-messaging.web.js'),
+        type: 'sourceFile',
+      };
+    }
   }
-  if (originalResolveRequest) {
-    return originalResolveRequest(context, moduleName, platform);
-  }
+
   return context.resolveRequest(context, moduleName, platform);
 };
 
-module.exports = withNativeWind(config, { input: './global.css' });
+// cjs + mjs support
+config.resolver.sourceExts = [
+  ...config.resolver.sourceExts,
+  'cjs',
+  'mjs',
+];
+
+module.exports = config;

@@ -1,5 +1,6 @@
+// app/_layout.js
 import React, { useEffect, useRef, useState } from 'react'
-import { AppState, View } from 'react-native'
+import { AppState, Platform, View } from 'react-native'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import * as SplashScreen from 'expo-splash-screen'
@@ -9,17 +10,41 @@ import { AuthProvider, useAuth } from '../context/AuthContext'
 import AnimatedSplash from '../components/AnimatedSplash'
 import AppLoader from '../components/AppLoader'
 import NetworkBanner from '../components/NetworkBanner'
-import {
-  registerForPushNotifications,
-  setupNotificationListeners,
-  getInitialNotification,
-  clearBadge,
-} from '../services/fcm'
-import { setupAndroidChannel } from '../services/notification'
 import { getSocket } from '../services/socket'
 import { playIncoming } from '../services/sounds'
-import { CallProvider } from '../context/CallContext'
-SplashScreen.preventAutoHideAsync().catch(() => { })
+import { CallProvider, useCall } from '../context/CallContext'
+
+// ─── Native-only modules safely import করো ────────────────────────────────
+let registerForPushNotifications  = async () => null
+let setupNotificationListeners    = () => () => {}
+let getInitialNotification        = async () => null
+let clearBadge                    = async () => {}
+let setupAndroidChannels          = async () => {}
+let registerBackgroundHandler     = () => {}
+let setupNotifeeListeners         = () => () => {}
+let cancelCallNotification        = async () => {}
+let setupForegroundHandler        = () => () => {}
+
+if (Platform.OS !== 'web') {
+  try {
+    const fcm = require('../services/fcm')
+    registerForPushNotifications = fcm.registerForPushNotifications
+    setupNotificationListeners   = fcm.setupNotificationListeners
+    getInitialNotification       = fcm.getInitialNotification
+    clearBadge                   = fcm.clearBadge
+    setupAndroidChannels         = fcm.setupAndroidChannels
+    registerBackgroundHandler    = fcm.registerBackgroundHandler
+    setupNotifeeListeners        = fcm.setupNotifeeListeners
+    cancelCallNotification       = fcm.cancelCallNotification
+    setupForegroundHandler       = fcm.setupForegroundHandler
+  } catch (e) {
+    console.warn('[Layout] FCM import failed:', e?.message)
+  }
+}
+
+// Background handler নিচে useEffect এ register হবে
+
+SplashScreen.preventAutoHideAsync().catch(() => {})
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,40 +54,54 @@ const queryClient = new QueryClient({
 
 const BG = '#0D1117'
 
-// ─── Notification tap হলে chat screen এ যাবে ─────────────────────────────────
-const navigateFromNotification = (router, data) => {
+const navigateFromNotification = (router, data, dispatch) => {
   if (!data) return
+
+  // ✅ Incoming call notification tap — incoming-call screen এ যাও
+  if (data?.type === 'incoming_call' && data?.callId) {
+    // CallContext এ INCOMING dispatch করো
+    dispatch?.({
+      type: 'INCOMING',
+      payload: {
+        callId:      data.callId,
+        channelName: data.channelName || '',
+        type:        data.callType    || 'voice',
+        token:       null,
+        uid:         null,
+        appId:       null,
+        peer: {
+          _id:    data.callerId    || '',
+          name:   data.callerName  || 'Unknown',
+          avatar: data.callerAvatar || '',
+        },
+      },
+    })
+    router.push({ pathname: '/incoming-call', params: {} })
+    return
+  }
+
+  // Regular message notification tap
   if (data?.senderId) {
     router.push({
       pathname: '/chat',
       params: {
-        id: data.senderId,
-        name: data.senderName ?? 'Chat',
+        id:     data.senderId,
+        name:   data.senderName   ?? 'Chat',
         avater: data.senderAvatar ?? '',
       },
     })
   }
-
-  if (data?.type === 'incoming_call' && data?.callId) {
-    router.push({
-      pathname: '/incoming-call',
-      params: {},  // CallContext socket listener এ state set হবে
-    })
-    return
-  }
-
 }
 
 function AppNavigator() {
   const { user, mongoUser, loading, emailVerified } = useAuth()
-  const router = useRouter()
-  const segments = useSegments()
-  const appState = useRef(AppState.currentState)
+  const { dispatch }  = useCall()
+  const router        = useRouter()
+  const segments      = useSegments()
+  const appState      = useRef(AppState.currentState)
 
   const [nativeSplashHidden, setNativeSplashHidden] = useState(false)
-  const [showAnimSplash] = useState(false)
-
-  const currentChatId = useRef(null)
+  const [showAnimSplash]                            = useState(false)
 
   useEffect(() => {
     SplashScreen.hideAsync()
@@ -73,19 +112,19 @@ function AppNavigator() {
   // Auth guard
   useEffect(() => {
     if (!nativeSplashHidden || loading) return
-    const inAuthScreens = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
-    const inVerifyScreen = segments[0] === 'verify-email'
+    const inAuth   = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
+    const inVerify = segments[0] === 'verify-email'
 
     if (!user) {
-      if (!inAuthScreens) router.replace('/login')
+      if (!inAuth) router.replace('/login')
     } else if (!emailVerified) {
-      if (!inVerifyScreen) router.replace('/verify-email')
+      if (!inVerify) router.replace('/verify-email')
     } else {
-      if (inAuthScreens || inVerifyScreen || segments.length === 0) router.replace('/(tab)')
+      if (inAuth || inVerify || segments.length === 0) router.replace('/(tab)')
     }
   }, [user, emailVerified, loading, segments, nativeSplashHidden])
 
-  // ─── Global Socket Sound Listener ─────────────────────────────────────────
+  // Global socket sound listener
   useEffect(() => {
     if (!mongoUser?._id) return
 
@@ -94,12 +133,10 @@ function AppNavigator() {
       if (!socket?.connected) return
 
       socket.off('receive_message_global_sound')
-
-      socket.on('receive_message_global_sound', ({ chatId, senderId }) => {
-        const onChatScreen = segments[0] === 'chat'
+      socket.on('receive_message_global_sound', ({ senderId }) => {
         if (senderId?.toString() === mongoUser._id?.toString()) return
-        if (!onChatScreen) {
-          playIncoming()
+        if (segments[0] !== 'chat') {
+          try { playIncoming() } catch (_) {}
         }
       })
 
@@ -109,76 +146,122 @@ function AppNavigator() {
     return () => clearInterval(interval)
   }, [mongoUser?._id, segments])
 
-  // ─── receive_message এ global sound ──────────────────────────────────────
   useEffect(() => {
     if (!mongoUser?._id) return
 
-    const setupGlobalSound = () => {
-      const socket = getSocket()
-      if (!socket) return false
-
-      socket.off('receive_message', handleGlobalMessage)
-      socket.on('receive_message', handleGlobalMessage)
-      return true
-    }
-
     const handleGlobalMessage = (msg) => {
       if (msg?.senderId?.toString() === mongoUser._id?.toString()) return
-      const onChatScreen = segments[0] === 'chat'
-      if (!onChatScreen) {
-        playIncoming()
+      if (segments[0] !== 'chat') {
+        try { playIncoming() } catch (_) {}
       }
     }
 
     const timer = setTimeout(() => {
-      setupGlobalSound()
+      const socket = getSocket()
+      if (!socket) return
+      socket.off('receive_message', handleGlobalMessage)
+      socket.on('receive_message', handleGlobalMessage)
     }, 1500)
 
     return () => {
       clearTimeout(timer)
       const socket = getSocket()
-      if (socket) socket.off('receive_message', handleGlobalMessage)
+      socket?.off('receive_message', handleGlobalMessage)
     }
   }, [mongoUser?._id])
 
-  // Notification + FCM setup
+  // ✅ Notification + FCM setup
   useEffect(() => {
-    if (!mongoUser?._id) return
+    if (!mongoUser?._id || Platform.OS === 'web') return
 
-    const initNotifications = async () => {
+    // ⚠️ Background handler index.js এ register হয় (React mount এর আগে)
+    // এখানে call করলে killed state এ কাজ করে না — তাই remove করা হয়েছে
+
+    const init = async () => {
       try {
-        await setupAndroidChannel()
-        await registerForPushNotifications().catch(() => { })
-        console.log('✅ Notification setup complete')
+        // ✅ Android notification channels — call channel সহ
+        await setupAndroidChannels()
+
+        // ✅ FCM token register
+        await registerForPushNotifications().catch(() => {})
+        console.log('[Layout] ✅ FCM setup complete')
       } catch (err) {
-        console.log('Notification init error:', err?.message)
+        console.log('[Layout] Notification init error:', err?.message)
       }
     }
-    initNotifications()
+    init()
 
-    const checkInitialNotification = async () => {
+    // ✅ Killed state থেকে notification tap করে app খোলা
+    const checkInitial = async () => {
       const data = await getInitialNotification()
       if (data) {
-        setTimeout(() => navigateFromNotification(router, data), 500)
+        setTimeout(() => navigateFromNotification(router, data, dispatch), 800)
       }
     }
-    checkInitialNotification()
+    checkInitial()
 
-    const unsub = setupNotificationListeners({
-      onTap: (data) => navigateFromNotification(router, data),
-      onReceive: (_data) => { },
+    // ✅ Background → foreground notification tap
+    const unsubNotif = setupNotificationListeners({
+      onTap: (data) => navigateFromNotification(router, data, dispatch),
     })
 
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      if (appState.current.match(/inactive|background/) && nextState === 'active') {
+    // ✅ Foreground FCM message — App খোলা থাকলেও এখন call push আসবে (server fix)।
+    // কিন্তু foreground এ socket ইতিমধ্যে call:incoming handle করেছে।
+    // তাই শুধু notification cancel করো — duplicate screen দেখানো লাগবে না।
+    const unsubForeground = setupForegroundHandler((callData) => {
+      console.log('[Layout] FCM foreground call received — socket should handle UI:', callData?.callId)
+      // Foreground এ notification দেখানো লাগবে না — socket এ incoming-call screen আসে।
+      // Notifee notification cancel করো যদি থাকে।
+      cancelCallNotification(callData?.callId).catch(() => {})
+    })
+
+    // ✅ Notifee Accept/Decline button press (notification এ)
+    const unsubNotifee = setupNotifeeListeners({
+      onAccept: (data) => {
+        cancelCallNotification(data?.callId)
+        // Socket দিয়ে accept করো
+        const socket = getSocket()
+        if (socket && data?.callId) {
+          dispatch({
+            type: 'INCOMING',
+            payload: {
+              callId:      data.callId,
+              channelName: data.channelName || '',
+              type:        data.callType    || 'voice',
+              token:       null,
+              uid:         null,
+              appId:       null,
+              peer: {
+                _id:    data.callerId    || '',
+                name:   data.callerName  || 'Unknown',
+                avatar: data.callerAvatar || '',
+              },
+            },
+          })
+          router.push({ pathname: '/incoming-call', params: {} })
+        }
+      },
+      onDecline: (data) => {
+        cancelCallNotification(data?.callId)
+        const socket = getSocket()
+        if (socket && data?.callId) {
+          socket.emit('call:reject', { callId: data.callId })
+        }
+      },
+    })
+
+    const sub = AppState.addEventListener('change', (next) => {
+      if (appState.current.match(/inactive|background/) && next === 'active') {
         clearBadge()
       }
-      appState.current = nextState
+      appState.current = next
     })
 
     return () => {
-      unsub()
-      subscription.remove()
+      unsubNotif?.()
+      unsubForeground?.()
+      unsubNotifee?.()
+      sub.remove()
     }
   }, [mongoUser?._id])
 
@@ -195,7 +278,7 @@ function AppNavigator() {
     return (
       <>
         <StatusBar style="light" backgroundColor={BG} />
-        <AnimatedSplash onDone={() => { }} />
+        <AnimatedSplash onDone={() => {}} />
       </>
     )
   }
@@ -212,23 +295,20 @@ function AppNavigator() {
           animationDuration: 150,
         }}
       >
-        <Stack.Screen name="(tab)" options={{ animation: 'none', animationDuration: 150, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="login" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="register" options={{ animation: 'slide_from_bottom', animationDuration: 250, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="verify-email" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
-        <Stack.Screen name="forgot-password" options={{ animation: 'slide_from_bottom', animationDuration: 220, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="chat" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true, fullScreenGestureEnabled: true }} />
-        <Stack.Screen name="profile" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="settings" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="developer" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-        <Stack.Screen name="change-password" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
-
-        <Stack.Screen name="call" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#000' }, gestureEnabled: false }} />
-        <Stack.Screen name="incoming-call" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#0D1117' }, gestureEnabled: false }} />
-
-
-
-
+        <Stack.Screen name="(tab)"            options={{ animation: 'none', animationDuration: 150, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="login"            options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="register"         options={{ animation: 'slide_from_bottom', animationDuration: 250, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="verify-email"     options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: BG } }} />
+        <Stack.Screen name="forgot-password"  options={{ animation: 'slide_from_bottom', animationDuration: 220, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="chat"             options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true, fullScreenGestureEnabled: true }} />
+        <Stack.Screen name="profile"          options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="settings"         options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="developer"        options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="change-password"  options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="call"             options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#000' }, gestureEnabled: false }} />
+        <Stack.Screen name="incoming-call"    options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#0D1117' }, gestureEnabled: false }} />
+        <Stack.Screen name="add-user"         options={{ animation: 'slide_from_bottom', animationDuration: 220, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
+        <Stack.Screen name="message-requests" options={{ animation: 'slide_from_right', animationDuration: 200, contentStyle: { backgroundColor: BG }, gestureEnabled: true }} />
       </Stack>
     </View>
   )

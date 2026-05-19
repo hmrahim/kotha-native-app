@@ -1,103 +1,88 @@
 // services/sounds.js
-import { createAudioPlayer, setAudioModeAsync } from 'expo-audio'
+// ✅ expo-audio ব্যবহার করা হচ্ছে — expo-av এর thread crash fix
+// Metro web build এ automatically sounds.web.js ব্যবহার হবে
 
-// require() দিয়ে load করলে path issue হয় না
-const SOUNDS = {
+import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio'
+
+// ─── Sound objects cache ──────────────────────────────────────────────────────
+const _players = {}
+
+const ASSETS = {
   incoming: require('../assets/sound/received.mp3'),
   outgoing: require('../assets/sound/send.mp3'),
   typing:   require('../assets/sound/typing.mp3'),
-  ringtun:  require('../assets/sound/ringtun.mp3'),  // callee ringtone
-  ringing:  require('../assets/sound/ringing.mp3'),  // caller ringback
+  ringtun:  require('../assets/sound/ringtun.mp3'),
+  ringing:  require('../assets/sound/ringing.mp3'),
 }
 
-const players = {}
-let inited = false
-
-const init = async () => {
-  if (inited) return
-  inited = true
+// ─── Audio Mode ───────────────────────────────────────────────────────────────
+const setCallAudioMode = async () => {
   try {
     await setAudioModeAsync({
-      playsInSilentMode: true,
-      shouldPlayInBackground: true,
-      interruptionMode: 'mixWithOthers',
+      playsInSilentModeIOS:    true,
+      staysActiveInBackground: true,
+      shouldDuckAndroid:       false,
     })
   } catch (e) {
-    console.log('⚠️ setAudioModeAsync failed:', e?.message)
-  }
-
-  for (const key of Object.keys(SOUNDS)) {
-    try {
-      players[key] = createAudioPlayer(SOUNDS[key])
-      players[key].volume = key === 'typing' ? 0.15 : 0.8
-    } catch (e) {
-      console.log(`⚠️ Player create failed for ${key}:`, e?.message)
-      players[key] = null
-    }
+    console.warn('[Sounds] setAudioMode error:', e?.message)
   }
 }
 
-const play = async (key) => {
+// ─── Load & cache ─────────────────────────────────────────────────────────────
+const getPlayer = async (key) => {
+  if (_players[key]) return _players[key]
   try {
-    await init()
-    const p = players[key]
-    if (!p) return
-    try { p.seekTo(0) } catch (_) {}
-    p.play()
+    await setCallAudioMode()
+    const player = createAudioPlayer(ASSETS[key])
+    player.volume = key === 'typing' ? 0.15 : 0.85
+    _players[key] = player
+    return player
+  } catch (e) {
+    console.warn('[Sounds] getPlayer failed:', key, e?.message)
+    return null
+  }
+}
+
+// ─── Play helper ──────────────────────────────────────────────────────────────
+const play = async (key, loop = false) => {
+  try {
+    const player = await getPlayer(key)
+    if (!player) return
+    player.loop = loop
+    player.seekTo(0)
+    player.play()
+  } catch (e) {
+    console.warn('[Sounds] play error:', key, e?.message)
+  }
+}
+
+// ─── Stop helper ──────────────────────────────────────────────────────────────
+const stop = async (key) => {
+  try {
+    const player = _players[key]
+    if (!player) return
+    player.pause()
+    player.seekTo(0)
   } catch (_) {}
 }
 
-export const playIncoming = () => play('incoming')
-export const playOutgoing = () => play('outgoing')
-export const playTyping   = () => play('typing')
+// ─── Public API ───────────────────────────────────────────────────────────────
+export const playIncoming  = () => play('incoming')
+export const playOutgoing  = () => play('outgoing')
+export const playTyping    = () => play('typing')
 
-// ── Callee ringtone — incoming call এ বাজে ───────────────────────────────────
-export const startRingtone = async () => {
-  try {
-    await init()
-    const p = players['ringtun']
-    if (!p) return
-    try { p.seekTo(0) } catch (_) {}
-    p.loop = true
-    p.play()
-  } catch (e) { console.log('⚠️ startRingtone:', e?.message) }
-}
+export const startRingtone = () => play('ringtun', true)
+export const stopRingtone  = () => stop('ringtun')
 
-export const stopRingtone = () => {
-  try {
-    const p = players['ringtun']
-    if (!p) return
-    p.loop = false
-    p.pause()
-    try { p.seekTo(0) } catch (_) {}
-  } catch (e) { console.log('⚠️ stopRingtone:', e?.message) }
-}
+export const startRingback = () => play('ringing', true)
+export const stopRingback  = () => stop('ringing')
 
-// ── Caller ringback — outgoing call এ বাজে ───────────────────────────────────
-export const startRingback = async () => {
-  try {
-    await init()
-    const p = players['ringing']
-    if (!p) return
-    try { p.seekTo(0) } catch (_) {}
-    p.loop = true
-    p.play()
-  } catch (e) { console.log('⚠️ startRingback:', e?.message) }
-}
-
-export const stopRingback = () => {
-  try {
-    const p = players['ringing']
-    if (!p) return
-    p.loop = false
-    p.pause()
-    try { p.seekTo(0) } catch (_) {}
-  } catch (e) { console.log('⚠️ stopRingback:', e?.message) }
-}
-
-export const releaseSounds = () => {
-  Object.values(players).forEach((p) => {
-    try { p?.remove?.() } catch (_) {}
-  })
-  inited = false
+export const releaseSounds = async () => {
+  for (const key of Object.keys(_players)) {
+    try {
+      _players[key].pause()
+      _players[key].remove()
+      delete _players[key]
+    } catch (_) {}
+  }
 }

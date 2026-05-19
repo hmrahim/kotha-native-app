@@ -1,13 +1,8 @@
 // services/socket.js
 import { io } from 'socket.io-client'
-import Constants from 'expo-constants'
+import { Platform } from 'react-native'
 
-// const SERVER_URL =
-//   process.env.EXPO_PUBLIC_SOCKET_URL ||
-//   process.env.EXPO_PUBLIC_API_URL?.replace(/\/api\/?$/, '') ||
-//   Constants.expoConfig?.extra?.socketUrl ||
-//   'http://localhost:5000'
-const SERVER_URL ='http://192.168.100.185:5000'
+const SERVER_URL = 'http://192.168.100.185:5000'
 
 console.log('🔌 Socket URL:', SERVER_URL)
 
@@ -22,9 +17,16 @@ export const connectSocket = (userId) => {
     socket = null
   }
 
+  // Web browser এ 'websocket' only দিলে অনেক সময় connect হয় না।
+  // polling দিয়ে শুরু করলে websocket এ upgrade হয় — সবচেয়ে reliable।
+  // Mobile এ 'websocket' only রাখা যায় (faster), web এ দুটোই রাখো।
+  const transports = Platform.OS === 'web'
+    ? ['polling', 'websocket']
+    : ['websocket']
+
   socket = io(SERVER_URL, {
     auth: { userId: userId.toString() },
-    transports: ['websocket'],
+    transports,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 800,
@@ -32,15 +34,16 @@ export const connectSocket = (userId) => {
     timeout: 10000,
   })
 
-  socket.on('connect', () => console.log('✅ Socket connected:', socket.id))
-  socket.on('disconnect', (reason) => console.log('❌ Socket disconnected:', reason))
+  socket.on('connect',       () => console.log('✅ Socket connected:', socket.id))
+  socket.on('disconnect',    (r) => console.log('❌ Socket disconnected:', r))
   socket.on('connect_error', (e) => console.log('⚠️ Socket connect_error:', e.message))
-  socket.on('reconnect', (n) => console.log('🔁 Socket reconnected after', n, 'tries'))
+  socket.on('reconnect',     (n) => console.log('🔁 Socket reconnected after', n, 'tries'))
 
   return socket
 }
 
 export const getSocket = () => socket
+
 export const disconnectSocket = () => {
   if (socket) {
     socket.removeAllListeners()
@@ -49,7 +52,6 @@ export const disconnectSocket = () => {
   }
 }
 
-// Promise-based send with ACK (instant)
 export const sendMessageSocket = (payload) =>
   new Promise((resolve, reject) => {
     if (!socket?.connected) return reject(new Error('Socket not connected'))
