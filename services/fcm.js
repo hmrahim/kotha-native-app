@@ -13,6 +13,7 @@ export const setupAndroidChannels = async () => {
     importance: AndroidImportance.HIGH,
     sound: 'received',
     vibration: true,
+    vibrationPattern: [100, 250, 100, 250],
   })
   await notifee.createChannel({
     id: 'incoming_call',
@@ -20,24 +21,30 @@ export const setupAndroidChannels = async () => {
     importance: AndroidImportance.HIGH,
     sound: 'ringtone',
     vibration: true,
-    vibrationPattern: [0, 1000, 500, 1000],
+    vibrationPattern: [100, 1000, 500, 1000],
     bypassDnd: true,
     lights: true,
     lightColor: '#0084FF',
   })
+  console.log('[FCM] ✅ Android channels created')
 }
 
 // ─── FCM Token Register ───────────────────────────────────────────────────────
 export const registerForPushNotifications = async () => {
   try {
     const authStatus = await messaging().requestPermission()
+    console.log('[FCM] authStatus:', authStatus)
     const enabled =
       authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
       authStatus === messaging.AuthorizationStatus.PROVISIONAL
 
-    if (!enabled) return null
+    if (!enabled) {
+      console.warn('[FCM] ❌ Permission NOT granted, authStatus:', authStatus)
+      return null
+    }
 
     const token = await messaging().getToken()
+    console.log('[FCM] ✅ Token:', token ? token.slice(0, 30) + '...' : 'NULL')
     return token
   } catch (e) {
     console.warn('[FCM] registerForPushNotifications error:', e?.message)
@@ -52,12 +59,36 @@ export const clearBadge = async () => {
   } catch (_) {}
 }
 
+// ─── Show Message Notification (Notifee) ─────────────────────────────────────
+const showMessageNotification = async (data) => {
+  try {
+    const notifId = await notifee.displayNotification({
+      title: data.senderName || data.title || 'New message',
+      body:  data.body       || 'Sent you a message',
+      android: {
+        channelId:   'messages',
+        pressAction: { id: 'default', launchActivity: 'default' },
+      },
+      data,
+    })
+    console.log('[FCM] ✅ Notification displayed, id:', notifId)
+  } catch (e) {
+    console.warn('[FCM] showMessageNotification error:', e?.message)
+  }
+}
+
 // ─── Background Handler Register ─────────────────────────────────────────────
 export const registerBackgroundHandler = () => {
   messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     const data = remoteMessage?.data || {}
+
     if (data?.type === 'incoming_call' && data?.callId) {
       await showCallNotification(data)
+      return
+    }
+
+    if (data?.type === 'message') {
+      await showMessageNotification(data)
     }
   })
 }
@@ -82,9 +113,8 @@ const showCallNotification = async (data) => {
           { title: 'Decline', pressAction: { id: 'decline' } },
         ],
         sound: 'ringtone',
-        vibrationPattern: [0, 1000, 500, 1000],
-        lights: true,
-        lightColor: '#0084FF',
+        vibrationPattern: [100, 1000, 500, 1000],
+        lights: ['#0084FF', 500, 500],
         ongoing: true,
         wakeUpScreen: true,
         showChronometer: false,
@@ -104,10 +134,24 @@ export const cancelCallNotification = async (callId) => {
 
 // ─── Foreground FCM Handler ───────────────────────────────────────────────────
 export const setupForegroundHandler = () => {
+  console.log('[FCM] setupForegroundHandler registered')
   const unsubscribe = messaging().onMessage(async (remoteMessage) => {
-    const data = remoteMessage?.data || {}
+    console.log('[FCM] 🔔 Foreground message received:', JSON.stringify(remoteMessage?.data))
+    const data         = remoteMessage?.data || {}
+    const notification = remoteMessage?.notification || {}
+
+    // Call notification
     if (data?.type === 'incoming_call' && data?.callId) {
       await showCallNotification(data)
+      return
+    }
+
+    // Regular message — foreground এও sound সহ দেখাও
+    if (data?.type === 'message') {
+      console.log('[FCM] 📨 Showing message notification for:', data.senderName)
+      await showMessageNotification(data)
+    } else {
+      console.warn('[FCM] ⚠️ Unknown message type:', data?.type)
     }
   })
   return unsubscribe

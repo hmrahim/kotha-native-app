@@ -12,6 +12,8 @@ import AppLoader from '../components/AppLoader'
 import NetworkBanner from '../components/NetworkBanner'
 import { getSocket } from '../services/socket'
 import { playIncoming } from '../services/sounds'
+import { registerFcmToken } from '../services/api'
+import '../services/notification'  // ✅ setNotificationHandler — foreground এ notification দেখানোর জন্য
 import { CallProvider, useCall } from '../context/CallContext'
 
 // ─── Native-only modules safely import করো ────────────────────────────────
@@ -182,8 +184,19 @@ function AppNavigator() {
         // ✅ Android notification channels — call channel সহ
         await setupAndroidChannels()
 
-        // ✅ FCM token register
-        await registerForPushNotifications().catch(() => {})
+        // ✅ FCM token register করো এবং server এ save করো
+        const fcmToken = await registerForPushNotifications().catch(() => null)
+        console.log('[Layout] fcmToken received:', fcmToken ? 'YES' : 'NULL')
+        if (fcmToken) {
+          try {
+            await registerFcmToken(fcmToken)
+            console.log('[Layout] ✅ FCM token saved to server successfully')
+          } catch (e) {
+            console.warn('[Layout] ❌ registerFcmToken FAILED:', e?.message)
+          }
+        } else {
+          console.warn('[Layout] ❌ No FCM token — notification will NOT work')
+        }
         console.log('[Layout] ✅ FCM setup complete')
       } catch (err) {
         console.log('[Layout] Notification init error:', err?.message)
@@ -205,15 +218,9 @@ function AppNavigator() {
       onTap: (data) => navigateFromNotification(router, data, dispatch),
     })
 
-    // ✅ Foreground FCM message — App খোলা থাকলেও এখন call push আসবে (server fix)।
-    // কিন্তু foreground এ socket ইতিমধ্যে call:incoming handle করেছে।
-    // তাই শুধু notification cancel করো — duplicate screen দেখানো লাগবে না।
-    const unsubForeground = setupForegroundHandler((callData) => {
-      console.log('[Layout] FCM foreground call received — socket should handle UI:', callData?.callId)
-      // Foreground এ notification দেখানো লাগবে না — socket এ incoming-call screen আসে।
-      // Notifee notification cancel করো যদি থাকে।
-      cancelCallNotification(callData?.callId).catch(() => {})
-    })
+    // ✅ Foreground FCM handler — message + call দুটোই handle করে
+    // setupForegroundHandler নিজেই notifee দিয়ে notification দেখায়
+    const unsubForeground = setupForegroundHandler()
 
     // ✅ Notifee Accept/Decline button press (notification এ)
     const unsubNotifee = setupNotifeeListeners({

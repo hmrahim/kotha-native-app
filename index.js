@@ -13,7 +13,7 @@ if (Platform.OS !== 'web') {
     try {
       await notifee.createChannel({
         id: 'incoming_call', name: 'Incoming Calls', importance: 5,
-        sound: 'ringtone', vibration: true, vibrationPattern: [0, 1000, 500, 1000],
+        sound: 'ringtone', vibration: true, vibrationPattern: [100, 1000, 500, 1000],
         bypassDnd: true, lights: true, lightColor: '#0084FF',
       })
       await notifee.displayNotification({
@@ -30,8 +30,8 @@ if (Platform.OS !== 'web') {
             { title: 'Accept',  pressAction: { id: 'accept',  launchActivity: 'default' } },
             { title: 'Decline', pressAction: { id: 'decline' } },
           ],
-          sound: 'ringtone', vibrationPattern: [0, 1000, 500, 1000],
-          lights: true, lightColor: '#0084FF',
+          sound: 'ringtone', vibrationPattern: [100, 1000, 500, 1000],
+          lights: ['#0084FF', 500, 500],
           ongoing: true, wakeUpScreen: true, showChronometer: false,
         },
       })
@@ -50,11 +50,40 @@ if (Platform.OS !== 'web') {
     } catch (_) {}
   }
 
+  // ─── Message Notification (background/killed) ─────────────────────────────
+  async function showMessageNotification(data, notification) {
+    try {
+      await notifee.createChannel({
+        id: 'messages', name: 'Messages', importance: 5,
+        sound: 'received', vibration: true,
+      })
+      await notifee.displayNotification({
+        title: data.senderName || notification?.title || 'New message',
+        body:  data.body       || notification?.body  || 'Sent you a message',
+        android: {
+          channelId:   'messages',
+          pressAction: { id: 'default', launchActivity: 'default' },
+        },
+        data,
+      })
+    } catch (e) {
+      console.warn('[BG] showMessageNotification:', e?.message)
+    }
+  }
+
   // 1. App killed/background — FCM data message
   messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-    const data = remoteMessage?.data || {}
+    const data         = remoteMessage?.data || {}
+    const notification = remoteMessage?.notification || {}
+
     if (data?.type === 'incoming_call' && data?.callId) {
       await showCallNotification(data)
+      return
+    }
+
+    // ✅ Regular message — notifee দিয়ে sound সহ দেখাও
+    if (data?.type === 'message') {
+      await showMessageNotification(data, notification)
     }
   })
 

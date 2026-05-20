@@ -76,7 +76,7 @@
             "./assets/sound/received.mp3",
             "./assets/sound/send.mp3",
             "./assets/sound/typing.mp3",
-            "./assets/sound/ringtune.mp3",
+           "./assets/sound/ringtun.mp3",
             "./assets/sound/ringing.mp3"
           ]
         }

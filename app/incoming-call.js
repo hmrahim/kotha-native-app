@@ -103,11 +103,15 @@ export default function IncomingCallScreen() {
     }
   }, [state.phase])
 
-  if (!state.callId) return null
-  const { callId, type, peer } = state
+  // ✅ HOOKS RULE: সব hooks early return এর আগে — React Law
+  // state থেকে extract করো (null হলে fallback দাও)
+  const callId  = state.callId  ?? null
+  const type    = state.type    ?? 'voice'
+  const peer    = state.peer    ?? null
   const isVideo = type === 'video'
 
   const handleAccept = useCallback(() => {
+    if (!callId) return  // guard: callId না থাকলে কিছু করো না
     if (acceptingRef.current) return
     acceptingRef.current = true
     safeStop()
@@ -203,6 +207,9 @@ export default function IncomingCallScreen() {
     dispatch({ type: 'RESET' })
     try { router.back() } catch (_) {}
   }, [callId, dispatch, router])
+
+  // ✅ Early return — hooks সব উপরে call হয়ে গেছে, এখন safe
+  if (!state.callId) return null
 
   const AVATAR = 156
   const RIPPLE = AVATAR * 0.95

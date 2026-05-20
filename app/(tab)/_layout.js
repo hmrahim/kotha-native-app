@@ -1,11 +1,13 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { Tabs, Redirect } from 'expo-router'          // ✅ Redirect যোগ
 import {
-  View, Text, TouchableOpacity, StyleSheet,
+  View, Text, TouchableOpacity, StyleSheet, Platform,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../context/AuthContext'    // ✅ useAuth যোগ
+import { setupAndroidChannels } from '../../services/fcm'
+import { setupAndroidChannel } from '../../services/notification'
 
 const T = {
   bg:        '#0D1117',
@@ -59,6 +61,14 @@ function CustomTabBar({ state, descriptors, navigation }) {
 // ── Layout ─────────────────────────────────────────────────────────────────────
 const _layout = () => {
   const { user, loading } = useAuth()   // ✅ auth check
+
+  // ✅ App start এ Android notification channels setup করো
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      setupAndroidChannels()  // notifee: messages + incoming_call channels
+    }
+    setupAndroidChannel()     // expo-notifications: iOS + fallback
+  }, [])
 
   // Auth check চলছে — কিছু দেখাব না
   if (loading) return null

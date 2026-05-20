@@ -25,7 +25,7 @@ export const setupAndroidChannel = async () => {
       name: 'Messages',
       importance: Notifications.AndroidImportance.HIGH,
       sound: 'received',
-      vibrationPattern: [0, 250, 100, 250],
+      vibrationPattern: [100, 250, 100, 250],
       lightColor: '#2DD4BF',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       enableLights: true,

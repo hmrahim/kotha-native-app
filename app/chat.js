@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons'
 
 import ChatHeader from '../components/ChatHeader'
 import MessageBubble from '../components/MessageBubble'
+import CallBubble from '../components/CallBubble'
 import MessageInput from '../components/MessageInput'
 import DateSeparator from '../components/DateSeparator'
 import TypingIndicator from '../components/TypingIndicator'
@@ -21,7 +22,7 @@ import ChatBackgroundPicker, { BUBBLE_COLORS } from '../components/ChatBackgroun
 import { AnimatedChatBg } from '../components/ChatBackgroundPicker'
 import { T } from '../theme'
 import { getSocket, sendMessageSocket } from '../services/socket'
-import { createMessage, getMessage, markSeen, editMessage, deleteMessage, getBlockStatus, blockUser, unblockUser, getChatBackground, setChatBackground, setChatBackgroundByReceiver, getNicknames, setNickname } from '../services/api'
+import { createMessage, getMessage, markSeen, editMessage, deleteMessage, getBlockStatus, blockUser, unblockUser, getChatBackground, setChatBackground, setChatBackgroundByReceiver, getNicknames, setNickname, getCallsBetween } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import { playIncoming, playOutgoing, playTyping } from '../services/sounds'
 import { uploadMediaItem } from '../services/mediaPickers'
@@ -55,6 +56,7 @@ export default function ChatScreen() {
 
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [newMsgCount, setNewMsgCount] = useState(0)
+  const [callItems, setCallItems] = useState([])   // call history — messages এর সাথে merge
 
   // ── Chat background ────────────────────────────────────────────────────────
   const [chatBackground, setChatBg] = useState({ type: 'default', value: null, id: 'default' })
@@ -122,6 +124,85 @@ export default function ChatScreen() {
 
   // inverted FlatList এর জন্য data উল্টো করতে হয়
   const messages = useMemo(() => [...rawMessages].reverse(), [rawMessages])
+
+  // ── Call history — messages এর সাথে merge করবো ─────────────────────────────
+  useEffect(() => {
+    if (!receiverId) return
+    getCallsBetween(receiverId)
+      .then((res) => {
+        if (!res?.data) return
+        // Race-condition fix: API আসার আগে socket থেকে নতুন item এলে হারাবে না
+        setCallItems((prev) => {
+          const apiIds = new Set(res.data.map((c) => c._id?.toString()))
+          const socketOnly = prev.filter((c) => !apiIds.has(c._id?.toString()))
+          return [...res.data, ...socketOnly]
+        })
+      })
+      .catch(() => {})
+  }, [receiverId])
+
+  // ✅ INSTANT: call:new_history — server সব data সহ emit করে → zero delay bubble
+  useEffect(() => {
+    const socket = getSocket()
+    if (!socket || !receiverId) return
+
+    // Primary: server সরাসরি full call data পাঠায়
+    const handleNewHistory = (item) => {
+      const myId = mongoUser?._id?.toString()
+      const isThisChat =
+        (item.callerId === receiverId && item.calleeId === myId) ||
+        (item.calleeId === receiverId && item.callerId === myId)
+      if (!isThisChat) return
+
+      setCallItems((prev) => {
+        if (prev.find((c) => c._id === item._id)) return prev
+        return [...prev, item]
+      })
+    }
+
+    // Fallback: call:new_history miss হলে API থেকে refresh করো
+    // (chat screen বন্ধ থাকলে বা socket reconnect হলে কাজে লাগে)
+    const handleRefetch = () => {
+      if (!receiverId) return
+      getCallsBetween(receiverId)
+        .then((res) => { if (res?.data) setCallItems(res.data) })
+        .catch(() => {})
+    }
+
+    socket.on('call:new_history', handleNewHistory)
+    // CallContext এ rejected/canceled/timeout এর জন্য already listener আছে
+    // তাই এখানে আলাদা listen করি না — শুধু call:new_history এ depend করি
+    // কিন্তু chat screen যদি background এ থাকে সেজন্য page focus এ refetch:
+    return () => {
+      socket.off('call:new_history', handleNewHistory)
+    }
+  }, [receiverId, mongoUser?._id])
+
+  // Messages + Calls একসাথে createdAt দিয়ে sort করো
+  // date separator যোগ করো — MessageBubble এর existing logic এর মতো
+  const mergedItems = useMemo(() => {
+    const allItems = [
+      ...rawMessages.map((m) => ({ ...m, itemType: 'message' })),
+      ...callItems,
+    ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+
+    // Date separator inject করো
+    const result = []
+    let lastDateStr = null
+    for (const item of allItems) {
+      const d = item.createdAt ? new Date(item.createdAt) : null
+      if (d) {
+        const dateStr = d.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })
+        if (dateStr !== lastDateStr) {
+          result.push({ _id: `date_${dateStr}`, type: 'date', label: dateStr })
+          lastDateStr = dateStr
+        }
+      }
+      result.push(item)
+    }
+    // inverted list এর জন্য উল্টো করো
+    return result.reverse()
+  }, [rawMessages, callItems])
 
   const chatList = queryClient.getQueryData(['chatList']) ?? []
 
@@ -539,6 +620,49 @@ export default function ChatScreen() {
 
   const renderItem = ({ item }) => {
     if (item.type === 'date') return <DateSeparator label={item.label} />
+
+    // ── Call bubble ──────────────────────────────────────────────────────────
+    if (item.itemType === 'call') {
+      // callerId আমি হলে outgoing, না হলে incoming
+      // API items এ server-computed isOutgoing আছে (accurate)
+      // Socket items এ নেই → callerId দিয়ে compute করো
+      const myId = mongoUser?._id?.toString()
+      const isOutgoing = item.isOutgoing !== undefined
+        ? item.isOutgoing
+        : (item.callerId ?? item.senderId) === myId
+      return (
+        <CallBubble
+          call={{ ...item, isOutgoing }}
+          bubbleColors={bubbleColors}
+          onCallBack={(callType) => {
+            // ChatHeader এর call button এর মতোই call initiate করো
+            const socket = getSocket()
+            socket?.emit('call:initiate', { receiverId, type: callType }, (ack) => {
+              if (!ack?.ok) {
+                Alert.alert('Call Failed', ack?.error === 'busy' ? 'User is busy' : ack?.error || 'Could not start call')
+                return
+              }
+              router.push({
+                pathname: '/call',
+                params: {
+                  callId:      ack.callId,
+                  channelName: ack.channelName,
+                  type:        ack.type,
+                  token:       String(ack.token),
+                  uid:         String(ack.uid),
+                  appId:       String(ack.appId),
+                  peerName:    chat.name,
+                  peerAvatar:  chat.avater || '',
+                  outgoing:    '1',
+                },
+              })
+            })
+          }}
+        />
+      )
+    }
+
+    // ── Message bubble ───────────────────────────────────────────────────────
     return (
       <MessageBubble
         message={{
@@ -608,8 +732,8 @@ export default function ChatScreen() {
             ) : (
               <FlatList
                 ref={flatListRef}
-                data={messages}
-                keyExtractor={(item) => item._id?.toString() ?? item.id}
+                data={mergedItems}
+                keyExtractor={(item) => (item._id?.toString() ?? item.id) + (item.itemType || '')}
                 renderItem={renderItem}
                 contentContainerStyle={styles.listContent}
                 showsVerticalScrollIndicator={false}

@@ -185,3 +185,8 @@ export const setChatBackground = (chatId, type, value, presetId) =>
 // chatId না থাকলে receiverId দিয়ে set করো (server-এ chat খুঁজে নেবে)
 export const setChatBackgroundByReceiver = (receiverId, type, value, presetId) =>
   api.patch(`/chat-background-by-receiver/${receiverId}`, { type, value, presetId }).then((r) => r.data)
+
+// ─── Call History ─────────────────────────────────────────────────────────────
+// দুইজনের মধ্যে call history — chat screen এ messages এর সাথে merge করার জন্য
+export const getCallsBetween = (otherId) =>
+  api.get(`/calls/between/${otherId}`).then((r) => r.data)
