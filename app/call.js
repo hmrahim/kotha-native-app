@@ -49,7 +49,7 @@ export default function CallScreen() {
 
   const [remoteUid,  setRemoteUid]  = useState(null)
   const [muted,      setM]          = useState(false)
-  const [speakerOn,  setSpeakerOn]  = useState(isVideo)
+  const [speakerOn,  setSpeakerOn]  = useState(!isVideo) // ✅ FIX: voice=speaker ON by default
   const [videoOff,   setVideoOff]   = useState(false)
   const [connected,  setConnected]  = useState(false)
   const [seconds,    setSeconds]    = useState(0)
@@ -68,8 +68,6 @@ export default function CallScreen() {
   const connectedRef = useRef(false)
 
   // ✅ KEY FIX: earlyJoin এ remote user আগেই join করে থাকতে পারে।
-  // registerEventHandler() এর পরে সেই event miss হওয়ার সম্ভাবনা আছে।
-  // তাই pending uid store করি এবং handler set হলে সাথে সাথে process করি।
   const pendingRemoteUid = useRef(null)
 
   // ── Pulse animation ────────────────────────────────────────────────────────
@@ -113,7 +111,7 @@ export default function CallScreen() {
     try { router.back() } catch (_) {}
   }, [callId, dispatch, router])
 
-  // ── onRemoteConnected — একটাই জায়গায় connected state handle করো ───────────
+  // ── onRemoteConnected ──────────────────────────────────────────────────────
   const onRemoteConnected = useCallback((rUid) => {
     if (!mountedRef.current) return
     if (connectedRef.current) return
@@ -123,7 +121,12 @@ export default function CallScreen() {
     setRemoteUid(rUid)
     setConnected(true)
     setNetWeak(false)
-    setSpeaker(isVideo)
+
+    // ✅ BUG FIX: আগে setSpeaker(isVideo) ছিল।
+    // Voice call এ isVideo=false → speaker OFF হতো — audio earpiece এ যেত।
+    // এখন voice=speaker ON, video=speaker OFF (ভিডিও call এ earpiece natural)।
+    setSpeaker(!isVideo)
+    setSpeakerOn(!isVideo)
 
     Animated.timing(remoteOpacity, { toValue: 1, duration: 300, useNativeDriver: true }).start()
 
@@ -148,9 +151,6 @@ export default function CallScreen() {
 
     if (isOutgoing) startRingback().catch(() => {})
 
-    // ✅ CRITICAL: Handler register সবার আগে।
-    // earlyJoin হলেও call.js এখানে নিজের handler দিয়ে REPLACE করে।
-    // agora.js এ registerEventHandler এখন merge করে না — সম্পূর্ণ replace করে।
     const registerHandlers = () => {
       registerEventHandler({
         onJoinChannelSuccess: () => {
@@ -184,41 +184,37 @@ export default function CallScreen() {
     }
 
     const setup = async () => {
-      // ✅ earlyJoined=1: incoming-call.js ইতিমধ্যে joinChannel করেছে।
-      // শুধু handler replace করো।
       if (wasEarlyJoin) {
         const eng = getEngine()
         if (eng) {
           console.log('[Call] ✅ Early join — registering real handlers')
           registerHandlers()
 
-          // ✅ CRITICAL: Race condition fix।
-          // earlyJoin হওয়ার পর remote user join করতে পারে BEFORE call.js mount হয়।
-          // incoming-call.js এ pendingRemoteUid capture করা হয়েছিল।
-          // এখানে check করো — যদি থাকে, সাথে সাথে connected করো।
-          // Agora SDK sometimes re-fires onUserJoined after re-register, sometimes না।
-          // তাই manually check করি।
-          setTimeout(() => {
-            if (!connectedRef.current && mountedRef.current) {
-              // Engine এর current remote users query করার কোনো standard API নেই।
-              // কিন্তু pendingRemoteUid global এ capture করা ছিল যদি থাকে।
-              const pending = global.__pendingRemoteUid
-              if (pending) {
-                console.log('[Call] ✅ Processing pending remote uid:', pending)
-                global.__pendingRemoteUid = null
-                onRemoteConnected(pending)
-              }
+          // ✅ BUG FIX: Race condition — remote user earlyJoin এর সময়
+          // join করে থাকতে পারে। global.__pendingRemoteUid এ capture করা ছিল।
+          // Retry loop দিয়ে check করো — single timeout এর চেয়ে reliable।
+          const checkPending = (attempt = 0) => {
+            if (connectedRef.current || !mountedRef.current) return
+            const pending = global.__pendingRemoteUid
+            if (pending) {
+              console.log('[Call] ✅ Processing pending remote uid:', pending)
+              global.__pendingRemoteUid = null
+              onRemoteConnected(pending)
+            } else if (attempt < 6) {
+              setTimeout(() => checkPending(attempt + 1), 500)
             }
-          }, 800) // 800ms — /call screen mount + render সময় দাও
+          }
+          setTimeout(() => checkPending(), 400)
 
-          if (!isOutgoing) setSpeaker(false)
+          // ✅ BUG FIX: আগে `if (!isOutgoing) setSpeaker(false)` ছিল।
+          // Incoming call এ speaker বন্ধ করে দিত — audio earpiece এ যেত।
+          // onRemoteConnected এ speaker সঠিকভাবে set হবে — এখানে কিছু করার নেই।
           return
         }
-        // engine নেই — fall through to full setup
         console.warn('[Call] earlyJoined=1 but engine missing — full setup')
       }
 
-      // ─── Normal setup ────────────────────────────────────────────────────
+      // ─── Normal setup ──────────────────────────────────────────────────────
       const ok = await requestCallPermissions(isVideo ? 'video' : 'voice')
       if (!ok || !mountedRef.current) { handleEnd(true); return }
 
@@ -234,7 +230,9 @@ export default function CallScreen() {
         video:       isVideo,
       })
 
-      if (isOutgoing && mountedRef.current) setSpeaker(false)
+      // ✅ BUG FIX: Outgoing call এ ringback বাজছে, speaker on রাখো।
+      // আগে `if (isOutgoing) setSpeaker(false)` ছিল — ringback earpiece এ যেত।
+      // এখন speaker state joinChannel এ already সঠিক set হয়ে গেছে।
     }
 
     setup()
@@ -314,12 +312,9 @@ export default function CallScreen() {
         </View>
       )}
 
-      {/* ✅ Local Camera:
-           - call connect হওয়ার আগে (isOutgoing + !connected): FULL SCREEN background
-           - connect হওয়ার পর: corner PiP */}
+      {/* Local Camera */}
       {isVideo && RtcSurfaceView && !videoOff && (
         <>
-          {/* Full screen preview — waiting state only */}
           {isOutgoing && !connected && (
             <View style={s.localFull}>
               <RtcSurfaceView style={{ flex: 1 }} canvas={{ uid: 0 }} zOrderMediaOverlay />
@@ -327,7 +322,6 @@ export default function CallScreen() {
             </View>
           )}
 
-          {/* Corner PiP — after connected */}
           {(!isOutgoing || connected) && (
             <Animated.View style={[s.pip, { transform: [{ scale: pipScale }] }]}>
               <View style={s.pipInner}>
@@ -338,7 +332,6 @@ export default function CallScreen() {
         </>
       )}
 
-      {/* videoOff হলে শুধু PiP placeholder */}
       {isVideo && RtcSurfaceView && videoOff && (!isOutgoing || connected) && (
         <Animated.View style={[s.pip, { transform: [{ scale: pipScale }] }]}>
           <View style={s.pipInner}>
@@ -517,7 +510,6 @@ const s = StyleSheet.create({
     elevation: 10,
   },
 
-  // ✅ Caller waiting — front camera full screen background
   localFull: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
@@ -525,7 +517,6 @@ const s = StyleSheet.create({
   },
   localFullOverlay: {
     ...StyleSheet.absoluteFillObject,
-    // হালকা dark overlay — top bar ও controls readable থাকবে
     backgroundColor: 'rgba(0,0,0,0.25)',
     zIndex: 2,
   },

@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { T, getColor, getInitials } from '../../theme'
 import { useAuth } from '../../context/AuthContext'
+import { useCall } from '../../context/CallContext'
 import { getSocket } from '../../services/socket'
 import { getCallHistory, deleteCallHistoryItem } from '../../services/callApi'
 
@@ -167,7 +168,7 @@ function CallItem({ item, onCall, onDelete, callingId }) {
         </View>
       </View>
 
-      {/* Re-call button — calling এর সময় spinner দেখাও */}
+      {/* Re-call button */}
       <TouchableOpacity
         style={[ci.callBtn, isCalling && { backgroundColor: 'rgba(45,212,191,0.25)' }]}
         onPress={() => !isCalling && onCall(item, item.type)}
@@ -203,10 +204,6 @@ function FAB({ onPress }) {
       <TouchableOpacity style={fab.btn} onPress={onPress} activeOpacity={0.82}>
         <View style={fab.glow} />
         <Ionicons name="call" size={24} color={T.bg} />
-        {/* small + badge */}
-        <View style={fab.badge}>
-          <Ionicons name="add" size={11} color={T.bg} />
-        </View>
       </TouchableOpacity>
     </Animated.View>
   )
@@ -217,11 +214,12 @@ export default function CallsScreen() {
   const insets        = useSafeAreaInsets()
   const router        = useRouter()
   const { mongoUser } = useAuth()
+  const { dispatch }  = useCall()   // ✅ BUG FIX: CallContext dispatch যোগ করা হয়েছে
 
-  const [items, setItems]         = useState([])
-  const [loading, setLoading]     = useState(true)
+  const [items, setItems]           = useState([])
+  const [loading, setLoading]       = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [callingId, setCallingId] = useState(null)   // instant feedback
+  const [callingId, setCallingId]   = useState(null)
 
   // ── Load history ────────────────────────────────────────────────────────────
   const load = useCallback(async (silent = false) => {
@@ -255,22 +253,12 @@ export default function CallsScreen() {
     return () => clearInterval(id)
   }, [load])
 
-  // ── Socket: incoming call → navigate ────────────────────────────────────────
-  useEffect(() => {
-    const id = setInterval(() => {
-      const socket = getSocket()
-      if (!socket?.connected) return
-
-      socket.off('call:incoming')
-      socket.on('call:incoming', (data) => {
-        router.push({ pathname: '/incoming-call', params: {} })
-      })
-
-      clearInterval(id)
-    }, 1000)
-
-    return () => clearInterval(id)
-  }, [router])
+  // ✅ BUG FIX: এই duplicate call:incoming listener টা সরানো হয়েছে।
+  // আগে এই screen এ আলাদা call:incoming listener ছিল যেটা:
+  //   1. CallContext এর listener কে socket.off() দিয়ে মুছে দিত
+  //   2. dispatch(INCOMING) ছাড়াই শুধু router.push() করত
+  //   ফলে incoming-call screen এ state.callId = null হতো এবং accept কাজ করত না।
+  // এখন CallContext একাই call:incoming handle করে — এখানে আর দরকার নেই।
 
   // ── Start / re-call ─────────────────────────────────────────────────────────
   const startCall = useCallback((item, callType = 'audio') => {
@@ -278,7 +266,6 @@ export default function CallsScreen() {
     if (!socket?.connected)
       return Alert.alert('Offline', 'Internet connection নেই')
 
-    // FIX: সাথে সাথে loading দেখাও — server ack এর আগেই visual feedback
     setCallingId(item._id)
 
     socket.emit(
@@ -293,6 +280,28 @@ export default function CallsScreen() {
             return Alert.alert('Blocked', 'এই user কে call করা যাচ্ছে না')
           return Alert.alert('Error', ack?.error || 'Call শুরু করা যায়নি')
         }
+
+        // ✅ BUG FIX: dispatch(OUTGOING) যোগ করা হয়েছে।
+        // আগে dispatch ছাড়াই router.push() হতো।
+        // CallContext এ state না থাকায় call:accepted এলে caller screen
+        // সঠিকভাবে react করতে পারত না।
+        dispatch({
+          type: 'OUTGOING',
+          payload: {
+            callId:      ack.callId,
+            channelName: ack.channelName,
+            type:        callType,
+            token:       ack.token,
+            uid:         ack.uid,
+            appId:       ack.appId,
+            peer: {
+              _id:    item.other?._id  || '',
+              name:   item.other?.name || '',
+              avatar: item.other?.photo || '',
+            },
+          },
+        })
+
         router.push({
           pathname: '/call',
           params: {
@@ -302,18 +311,18 @@ export default function CallsScreen() {
             token:       ack.token,
             uid:         String(ack.uid),
             appId:       ack.appId,
-            peerName:    item.other?.name    || '',
-            peerAvatar:  item.other?.photo   || '',
+            peerName:    item.other?.name  || '',
+            peerAvatar:  item.other?.photo || '',
             outgoing:    '1',
           },
         })
       }
     )
-  }, [router])
+  }, [router, dispatch])
 
-  // ── Add Call FAB → go to Chats tab to pick a contact ────────────────────────
+  // ── Add Call FAB ─────────────────────────────────────────────────────────────
   const handleAddCall = useCallback(() => {
-    router.push('/(tab)/')   // Chats tab — user picks a chat then calls
+    router.push('/(tab)/')
   }, [router])
 
   // ── Delete history item ─────────────────────────────────────────────────────
@@ -338,22 +347,15 @@ export default function CallsScreen() {
       <View style={s.header}>
         <Text style={s.title}>Calls</Text>
         <View style={s.headerRight}>
-          {/* Video call icon */}
           <TouchableOpacity style={s.iconBtn}>
             <Ionicons name="videocam-outline" size={22} color={T.textSecond} />
           </TouchableOpacity>
-
-          {/* Add Call icon (header shortcut) */}
           <TouchableOpacity style={s.iconBtn} onPress={handleAddCall}>
             <Ionicons name="call-outline" size={22} color={T.textSecond} />
-            <View style={s.addDot}>
-              <Ionicons name="add" size={9} color={T.bg} />
-            </View>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* thin accent border */}
       <View style={s.border} />
 
       {/* ── List / Empty ── */}
@@ -406,14 +408,6 @@ const s = StyleSheet.create({
   iconBtn: {
     width: 40, height: 40, borderRadius: 20,
     alignItems: 'center', justifyContent: 'center',
-    position: 'relative',
-  },
-  addDot: {
-    position: 'absolute', bottom: 6, right: 4,
-    width: 14, height: 14, borderRadius: 7,
-    backgroundColor: T.accent,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: T.surface,
   },
   border: { height: 1, backgroundColor: T.accent, opacity: 0.18 },
   sep:    { height: 1, backgroundColor: T.border, marginLeft: 80 },
@@ -466,12 +460,5 @@ const fab = StyleSheet.create({
     width: 60, height: 60, borderRadius: 30,
     backgroundColor: T.accent, opacity: 0.22,
     transform: [{ scale: 1.4 }],
-  },
-  badge: {
-    position: 'absolute', top: -1, right: -1,
-    width: 18, height: 18, borderRadius: 9,
-    backgroundColor: '#fff',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: T.accent,
   },
 })

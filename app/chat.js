@@ -21,7 +21,7 @@ import ScrollToBottomButton from '../components/ScrollToBottomButton'
 import ChatBackgroundPicker, { BUBBLE_COLORS } from '../components/ChatBackgroundPicker'
 import { AnimatedChatBg } from '../components/ChatBackgroundPicker'
 import { T } from '../theme'
-import { getSocket, sendMessageSocket } from '../services/socket'
+import { getSocket, sendMessageSocket, setActiveChatUser } from '../services/socket'
 import { createMessage, getMessage, markSeen, editMessage, deleteMessage, getBlockStatus, blockUser, unblockUser, getChatBackground, setChatBackground, setChatBackgroundByReceiver, getNicknames, setNickname, getCallsBetween } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import { playIncoming, playOutgoing, playTyping } from '../services/sounds'
@@ -64,6 +64,15 @@ export default function ChatScreen() {
   const [bgChatId, setBgChatId] = useState(null) // real chatId for background patch
 
   const receiverId = params.id?.toString()
+
+  // ── Active Chat Tracker ────────────────────────────────────────────────────
+  // Chat screen open হলে set করো, close হলে clear করো।
+  // এটা _layout.js এবং fcm.js এ notification/sound suppress করতে ব্যবহার হয়।
+  useEffect(() => {
+    if (!receiverId) return
+    setActiveChatUser(receiverId)
+    return () => setActiveChatUser(null)
+  }, [receiverId])
 
   // ── Block status চেক করো screen খুললে ─────────────────────────────────────
   useEffect(() => {

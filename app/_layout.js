@@ -10,7 +10,7 @@ import { AuthProvider, useAuth } from '../context/AuthContext'
 import AnimatedSplash from '../components/AnimatedSplash'
 import AppLoader from '../components/AppLoader'
 import NetworkBanner from '../components/NetworkBanner'
-import { getSocket } from '../services/socket'
+import { getSocket, setActiveChatUser, getActiveChatUser } from '../services/socket'
 import { playIncoming } from '../services/sounds'
 import { registerFcmToken } from '../services/api'
 import '../services/notification'  // ✅ setNotificationHandler — foreground এ notification দেখানোর জন্য
@@ -44,8 +44,6 @@ if (Platform.OS !== 'web') {
   }
 }
 
-// Background handler নিচে useEffect এ register হবে
-
 SplashScreen.preventAutoHideAsync().catch(() => {})
 
 const queryClient = new QueryClient({
@@ -56,12 +54,37 @@ const queryClient = new QueryClient({
 
 const BG = '#0D1117'
 
-const navigateFromNotification = (router, data, dispatch) => {
+// ─── Socket ready হওয়া পর্যন্ত wait করে navigate করো ───────────────────────
+// ✅ BUG FIX: Killed/background state থেকে app open হলে socket connect হতে
+// সময় লাগে। আগে সাথে সাথে navigate করা হতো — socket না থাকায় call:accept
+// fail করতো এবং call drop হতো।
+const navigateWhenSocketReady = (router, data, dispatch, maxRetries = 25) => {
+  let attempts = 0
+
+  const tryNavigate = () => {
+    const socket = getSocket()
+
+    if (socket?.connected) {
+      // ✅ Socket ready — এখন navigate করো
+      _doNavigate(router, data, dispatch)
+    } else if (attempts++ < maxRetries) {
+      // Socket এখনো ready না — আবার try করো
+      setTimeout(tryNavigate, 400)
+    } else {
+      console.warn('[Layout] Socket never connected — navigating anyway')
+      _doNavigate(router, data, dispatch)
+    }
+  }
+
+  // App boot এর জন্য একটু সময় দাও তারপর শুরু করো
+  setTimeout(tryNavigate, 600)
+}
+
+const _doNavigate = (router, data, dispatch) => {
   if (!data) return
 
-  // ✅ Incoming call notification tap — incoming-call screen এ যাও
+  // ✅ Incoming call notification — incoming-call screen এ যাও
   if (data?.type === 'incoming_call' && data?.callId) {
-    // CallContext এ INCOMING dispatch করো
     dispatch?.({
       type: 'INCOMING',
       payload: {
@@ -72,27 +95,47 @@ const navigateFromNotification = (router, data, dispatch) => {
         uid:         null,
         appId:       null,
         peer: {
-          _id:    data.callerId    || '',
-          name:   data.callerName  || 'Unknown',
+          _id:    data.callerId     || '',
+          name:   data.callerName   || 'Unknown',
           avatar: data.callerAvatar || '',
         },
       },
     })
-    router.push({ pathname: '/incoming-call', params: {} })
+    try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) {}
     return
   }
 
   // Regular message notification tap
   if (data?.senderId) {
-    router.push({
-      pathname: '/chat',
-      params: {
-        id:     data.senderId,
-        name:   data.senderName   ?? 'Chat',
-        avater: data.senderAvatar ?? '',
-      },
-    })
+    try {
+      router.push({
+        pathname: '/chat',
+        params: {
+          id:     data.senderId,
+          name:   data.senderName   ?? 'Chat',
+          avater: data.senderAvatar ?? '',
+        },
+      })
+    } catch (_) {}
   }
+}
+
+// ─── Foreground notification tap (socket সাধারণত ready থাকে) ────────────────
+const navigateFromNotification = (router, data, dispatch) => {
+  if (!data) return
+  const socket = getSocket()
+
+  if (data?.type === 'incoming_call' && data?.callId) {
+    if (socket?.connected) {
+      _doNavigate(router, data, dispatch)
+    } else {
+      // Socket disconnect হয়ে থাকলেও retry করো
+      navigateWhenSocketReady(router, data, dispatch, 10)
+    }
+    return
+  }
+
+  _doNavigate(router, data, dispatch)
 }
 
 function AppNavigator() {
@@ -112,20 +155,25 @@ function AppNavigator() {
   }, [])
 
   // Auth guard
+// Auth guard
   useEffect(() => {
     if (!nativeSplashHidden || loading) return
     const inAuth   = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
     const inVerify = segments[0] === 'verify-email'
 
-    if (!user) {
-      if (!inAuth) router.replace('/login')
-    } else if (!emailVerified) {
-      if (!inVerify) router.replace('/verify-email')
-    } else {
-      if (inAuth || inVerify || segments.length === 0) router.replace('/(tab)')
-    }
-  }, [user, emailVerified, loading, segments, nativeSplashHidden])
+    // ✅ FIX: setTimeout দিয়ে native stack render শেষ হওয়ার পরে navigate করো
+    const t = setTimeout(() => {
+      if (!user) {
+        if (!inAuth) router.replace('/login')
+      } else if (!emailVerified) {
+        if (!inVerify) router.replace('/verify-email')
+      } else {
+        if (inAuth || inVerify || segments.length === 0) router.replace('/(tab)')
+      }
+    }, 0)
 
+    return () => clearTimeout(t)
+  }, [user, emailVerified, loading, segments, nativeSplashHidden])
   // Global socket sound listener
   useEffect(() => {
     if (!mongoUser?._id) return
@@ -137,6 +185,10 @@ function AppNavigator() {
       socket.off('receive_message_global_sound')
       socket.on('receive_message_global_sound', ({ senderId }) => {
         if (senderId?.toString() === mongoUser._id?.toString()) return
+        // ✅ FIX: এই user এর সাথে chat screen খোলা থাকলে sound বাজাবে না
+        // chat.js নিজেই playIncoming() করে — duplicate sound হবে
+        const activeChatId = getActiveChatUser()
+        if (activeChatId && activeChatId === senderId?.toString()) return
         if (segments[0] !== 'chat') {
           try { playIncoming() } catch (_) {}
         }
@@ -153,6 +205,10 @@ function AppNavigator() {
 
     const handleGlobalMessage = (msg) => {
       if (msg?.senderId?.toString() === mongoUser._id?.toString()) return
+      // ✅ FIX: এই sender এর সাথে chat screen open থাকলে sound বাজাবে না
+      // chat.js নিজেই playIncoming() handle করে
+      const activeChatId = getActiveChatUser()
+      if (activeChatId && activeChatId === msg?.senderId?.toString()) return
       if (segments[0] !== 'chat') {
         try { playIncoming() } catch (_) {}
       }
@@ -176,15 +232,10 @@ function AppNavigator() {
   useEffect(() => {
     if (!mongoUser?._id || Platform.OS === 'web') return
 
-    // ⚠️ Background handler index.js এ register হয় (React mount এর আগে)
-    // এখানে call করলে killed state এ কাজ করে না — তাই remove করা হয়েছে
-
     const init = async () => {
       try {
-        // ✅ Android notification channels — call channel সহ
         await setupAndroidChannels()
 
-        // ✅ FCM token register করো এবং server এ save করো
         const fcmToken = await registerForPushNotifications().catch(() => null)
         console.log('[Layout] fcmToken received:', fcmToken ? 'YES' : 'NULL')
         if (fcmToken) {
@@ -204,11 +255,19 @@ function AppNavigator() {
     }
     init()
 
-    // ✅ Killed state থেকে notification tap করে app খোলা
+    // ✅ BUG FIX: Killed state থেকে notification tap করে app খোলা।
+    // আগে সাথে সাথে navigate করা হতো — socket ready না থাকায় call drop হতো।
+    // এখন socket connected হওয়া পর্যন্ত retry করে তারপর navigate করে।
     const checkInitial = async () => {
       const data = await getInitialNotification()
       if (data) {
-        setTimeout(() => navigateFromNotification(router, data, dispatch), 800)
+        if (data?.type === 'incoming_call') {
+          // Call notification — socket ready হওয়া পর্যন্ত wait করো
+          navigateWhenSocketReady(router, data, dispatch)
+        } else {
+          // Regular notification — delay দিলেই চলে
+          setTimeout(() => navigateFromNotification(router, data, dispatch), 800)
+        }
       }
     }
     checkInitial()
@@ -218,41 +277,62 @@ function AppNavigator() {
       onTap: (data) => navigateFromNotification(router, data, dispatch),
     })
 
-    // ✅ Foreground FCM handler — message + call দুটোই handle করে
-    // setupForegroundHandler নিজেই notifee দিয়ে notification দেখায়
+    // ✅ Foreground FCM handler
     const unsubForeground = setupForegroundHandler()
 
-    // ✅ Notifee Accept/Decline button press (notification এ)
+    // ✅ BUG FIX: Notifee Accept/Decline button press
+    // আগে: socket null check ছিল না, disconnected socket এ navigate করতো
+    // এখন: socket.connected নিশ্চিত করে তারপর navigate করে, না হলে retry করে
     const unsubNotifee = setupNotifeeListeners({
       onAccept: (data) => {
         cancelCallNotification(data?.callId)
-        // Socket দিয়ে accept করো
-        const socket = getSocket()
-        if (socket && data?.callId) {
-          dispatch({
-            type: 'INCOMING',
-            payload: {
-              callId:      data.callId,
-              channelName: data.channelName || '',
-              type:        data.callType    || 'voice',
-              token:       null,
-              uid:         null,
-              appId:       null,
-              peer: {
-                _id:    data.callerId    || '',
-                name:   data.callerName  || 'Unknown',
-                avatar: data.callerAvatar || '',
+        if (!data?.callId) return
+
+        let retries = 0
+        const tryAccept = () => {
+          const socket = getSocket()
+          if (socket?.connected) {
+            dispatch({
+              type: 'INCOMING',
+              payload: {
+                callId:      data.callId,
+                channelName: data.channelName || '',
+                type:        data.callType    || 'voice',
+                token:       null,
+                uid:         null,
+                appId:       null,
+                peer: {
+                  _id:    data.callerId     || '',
+                  name:   data.callerName   || 'Unknown',
+                  avatar: data.callerAvatar || '',
+                },
               },
-            },
-          })
-          router.push({ pathname: '/incoming-call', params: {} })
+            })
+            try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) {}
+          } else if (retries++ < 15) {
+            setTimeout(tryAccept, 400)
+          } else {
+            console.warn('[Layout] onAccept: socket never connected after retries')
+          }
         }
+        tryAccept()
       },
+
       onDecline: (data) => {
         cancelCallNotification(data?.callId)
         const socket = getSocket()
-        if (socket && data?.callId) {
+        if (socket?.connected && data?.callId) {
           socket.emit('call:reject', { callId: data.callId })
+        }
+      },
+
+      onDismiss: (data) => {
+        if (data?.callId) {
+          cancelCallNotification(data.callId)
+          const socket = getSocket()
+          if (socket?.connected) {
+            socket.emit('call:reject', { callId: data.callId })
+          }
         }
       },
     })

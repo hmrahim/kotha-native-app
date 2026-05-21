@@ -42,13 +42,11 @@ let _handler = {}
 export const getEngine = () => engine
 
 // ─── Pre-warm ─────────────────────────────────────────────────────────────────
-// call:incoming আসার সাথে সাথে call হয়।
-// User accept press করার আগেই permission + engine + audio ready।
 export const preWarmForCall = async (type = 'voice') => {
   try {
     await requestCallPermissions(type)
     const eng = initAgoraEngine()
-    try { eng?.enableLocalAudio?.(false) } catch (_) {} // audio open করো কিন্তু mute রাখো
+    try { eng?.enableLocalAudio?.(false) } catch (_) {}
     console.log('[Agora] Pre-warm complete ✅')
   } catch (_) {}
 }
@@ -77,7 +75,6 @@ export const initAgoraEngine = () => {
     engine = _createAgoraRtcEngine()
     engine.initialize({
       appId: AGORA_APP_ID,
-      // Communication mode: onUserJoined সবচেয়ে দ্রুত fire করে
       channelProfile: _ChannelProfileType?.ChannelProfileCommunication ?? 0,
       audioScenario:  _AudioScenario?.AudioScenarioChatRoomEntertainment
                    ?? _AudioScenario?.AudioScenarioDefault ?? 0,
@@ -86,19 +83,15 @@ export const initAgoraEngine = () => {
     engine.enableAudio()
 
     try {
-      // Best audio quality with AEC + ANS + AGC
       engine.setAudioProfile?.(
         _AudioProfile?.AudioProfileMusicStandard ?? 1,
         _AudioScenario?.AudioScenarioChatRoomEntertainment ?? 3
       )
-      // AI Noise Suppression
       engine.enableDeepLearningDenoise?.(true)
-      // Echo cancellation aggressive mode
       engine.setParameters?.(JSON.stringify({ 'che.audio.aec.mode': 2 }))
       engine.setParameters?.(JSON.stringify({ 'che.audio.enable.aec': true }))
       engine.setParameters?.(JSON.stringify({ 'che.audio.enable.ans': true }))
       engine.setParameters?.(JSON.stringify({ 'che.audio.enable.agc': true }))
-      // ✅ Low latency — সবচেয়ে গুরুত্বপূর্ণ
       engine.setParameters?.(JSON.stringify({ 'rtc.lowlatency': true }))
 
       if (Platform.OS === 'android') {
@@ -122,17 +115,12 @@ export const initAgoraEngine = () => {
 }
 
 // ─── Register Event Handler ───────────────────────────────────────────────────
-// ✅ CRITICAL FIX: এটা এখন REPLACE করে, merge করে না।
-// call.js যখন এটা call করে তখন incoming-call.js এর dummy handler সম্পূর্ণ
-// মুছে যায় এবং real handler set হয়।
 export const registerEventHandler = (handlers) => {
-  // ✅ REPLACE — পুরনো সব handler মুছে নতুন set করো
   _handler = handlers
 
   if (!engine) return
 
   try {
-    // ✅ পুরনো handler আগে unregister করো
     try { engine.unregisterEventHandler?.({}) } catch (_) {}
 
     engine.registerEventHandler({
@@ -164,11 +152,6 @@ export const registerEventHandler = (handlers) => {
         console.log('[Agora] connectionState:', state, 'reason:', reason)
         _handler.onConnectionStateChanged?.(conn, state)
       },
-
-      // ✅ CRITICAL FIX: onRemoteAudioStateChanged এ onUserJoined call করা যাবে না।
-      // এটা duplicate connected event ঘটায় — call.js এ connectedRef guard থাকলেও
-      // এটা race condition তৈরি করে।
-      // onUserJoined একটাই যথেষ্ট। এটা remove করা হয়েছে।
     })
   } catch (e) {
     console.warn('[Agora] registerEventHandler failed:', e?.message)
@@ -199,7 +182,7 @@ export const joinChannel = async ({ token, channelName, uid, video = false }) =>
         eng.setVideoEncoderConfiguration?.({
           dimensions:           { width: 640, height: 480 },
           frameRate:            24,
-          bitrate:              0,    // 0 = SDK auto
+          bitrate:              0,
           minBitrate:           -1,
           orientationMode:      0,
           degradationPreference: 1,
@@ -220,7 +203,13 @@ export const joinChannel = async ({ token, channelName, uid, video = false }) =>
     }
 
     eng.setClientRole?.(_ClientRoleType?.ClientRoleBroadcaster ?? 1)
-    try { eng.setEnableSpeakerphone(video) } catch (_) {}
+
+    // ✅ BUG FIX: আগে `setEnableSpeakerphone(video)` ছিল।
+    // Voice call এ video=false → speaker OFF হয়ে earpiece এ যেত — audio শোনা যেত না।
+    // এখন voice call এও speaker ON রাখা হচ্ছে।
+    // Video call এ speaker OFF (ভিডিও call এ earpiece বেশি natural)।
+    // User call screen থেকে নিজে toggle করতে পারবে।
+    try { eng.setEnableSpeakerphone(!video) } catch (_) {}
 
     const numericUid = parseInt(uid, 10) || 0
     console.log('[Agora] Joining channel:', channelName, 'uid:', numericUid, 'video:', video)

@@ -44,6 +44,17 @@ export const connectSocket = (userId) => {
 
 export const getSocket = () => socket
 
+// ─── Active Chat Tracker ──────────────────────────────────────────────────────
+// Chat screen open থাকলে কোন user এর সাথে chat করছে সেটা track করো।
+// এটা use করে notification/sound suppress করা হয়।
+let _activeChatUserId = null
+
+export const setActiveChatUser = (userId) => {
+  _activeChatUserId = userId ? userId.toString() : null
+}
+
+export const getActiveChatUser = () => _activeChatUserId
+
 export const disconnectSocket = () => {
   if (socket) {
     socket.removeAllListeners()

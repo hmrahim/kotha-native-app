@@ -4,6 +4,7 @@ import 'expo-router/entry'
 import messaging from '@react-native-firebase/messaging'
 import notifee, { EventType } from '@notifee/react-native'
 import { Platform } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.185:5000/api'
 
@@ -81,7 +82,6 @@ if (Platform.OS !== 'web') {
       return
     }
 
-    // ✅ Regular message — notifee দিয়ে sound সহ দেখাও
     if (data?.type === 'message') {
       await showMessageNotification(data, notification)
     }
@@ -91,14 +91,31 @@ if (Platform.OS !== 'web') {
   notifee.onBackgroundEvent(async ({ type, detail }) => {
     const { notification, pressAction } = detail
     const data = notification?.data || {}
+
     if (type === EventType.ACTION_PRESS) {
       await notifee.cancelNotification(notification.id)
+
+      if (pressAction?.id === 'accept' && data?.callId) {
+        // ✅ Call data AsyncStorage এ save করো — fcm.js এর getInitialNotification() সেটা পড়বে
+        try {
+          await AsyncStorage.setItem('@pendingCallAccept', JSON.stringify(data))
+          console.log('[BG] ✅ Call accept data saved to AsyncStorage:', data?.callId)
+        } catch (e) {
+          console.warn('[BG] AsyncStorage save error:', e?.message)
+        }
+      }
+
       if (pressAction?.id === 'decline' && data?.callId) {
+        // ✅ App background/killed — socket নেই, HTTP দিয়ে reject করো
         await rejectCallHttp(data.callId)
       }
     }
-    if (type === EventType.DISMISSED && data?.callId) {
-      await rejectCallHttp(data.callId)
-    }
+
+    // ✅ FIX: DISMISSED event এ আর reject করা হবে না।
+    // Android system notification dismiss করলে call reject হওয়া উচিত না।
+    // 35s ring timeout এ server নিজেই missed করবে।
+    // if (type === EventType.DISMISSED && data?.callId) {
+    //   await rejectCallHttp(data.callId)  // ← এটা সরানো হয়েছে
+    // }
   })
 }

@@ -3,6 +3,7 @@ import messaging from '@react-native-firebase/messaging'
 import notifee, { AndroidImportance, AndroidVisibility, EventType } from '@notifee/react-native'
 import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
+import { getActiveChatUser } from './socket'
 
 // ─── Android Notification Channels ───────────────────────────────────────────
 export const setupAndroidChannels = async () => {
@@ -62,6 +63,13 @@ export const clearBadge = async () => {
 // ─── Show Message Notification (Notifee) ─────────────────────────────────────
 const showMessageNotification = async (data) => {
   try {
+    // ✅ FIX: এই sender এর সাথে chat screen খোলা থাকলে notification দেখাবে না
+    // chat.js নিজেই sound বাজায় এবং message দেখায়
+    const activeChatId = getActiveChatUser()
+    if (activeChatId && activeChatId === data?.senderId?.toString()) {
+      console.log('[FCM] 🔕 Notification suppressed — chat is active with sender:', data.senderId)
+      return
+    }
     const notifId = await notifee.displayNotification({
       title: data.senderName || data.title || 'New message',
       body:  data.body       || 'Sent you a message',
@@ -171,19 +179,22 @@ export const setupNotifeeListeners = ({ onAccept, onDecline, onDismiss }) => {
         onDecline?.(data)
       }
     }
-    if (type === EventType.DISMISSED) {
-      onDismiss?.(data)
-    }
+    // ✅ FIX: DISMISSED event এ onDismiss call করা হবে না।
+    // System dismiss → auto reject এড়ানোর জন্য এটা সরানো হয়েছে।
+    // if (type === EventType.DISMISSED) {
+    //   onDismiss?.(data)
+    // }
   })
   return unsubscribe
 }
 
 // ─── Notification Tap Listeners ───────────────────────────────────────────────
-export const setupNotificationListeners = ({ onNotificationTap }) => {
-  // App foreground এ notification tap
+// ✅ FIX: parameter ছিল onNotificationTap — _layout.js এ onTap পাঠানো হয়
+// এই mismatch এর কারণে notification tap করলে chat screen এ navigate হতো না
+export const setupNotificationListeners = ({ onTap }) => {
   const sub1 = Notifications.addNotificationResponseReceivedListener((response) => {
     const data = response.notification.request.content.data
-    onNotificationTap?.(data)
+    onTap?.(data)
   })
 
   return () => {
@@ -194,6 +205,22 @@ export const setupNotificationListeners = ({ onNotificationTap }) => {
 // ─── Initial Notification (App killed থেকে open) ─────────────────────────────
 export const getInitialNotification = async () => {
   try {
+    // ✅ FIX: Background notification এ "Accept" press করলে
+    // notifee.cancelNotification() call হওয়ার পরে app launch হয়।
+    // তখন notifee.getInitialNotification() null দেয় কারণ notification আগেই cancel হয়েছে।
+    // তাই accept press এর data AsyncStorage এ save করা হয় index.js এ।
+    // এখানে সেটা check করো।
+    try {
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default
+      const raw = await AsyncStorage.getItem('@pendingCallAccept')
+      if (raw) {
+        await AsyncStorage.removeItem('@pendingCallAccept')
+        const data = JSON.parse(raw)
+        console.log('[FCM] ✅ Pending call accept found in AsyncStorage:', data?.callId)
+        return data
+      }
+    } catch (_) {}
+
     // Notifee থেকে initial notification
     const initial = await notifee.getInitialNotification()
     if (initial) return initial.notification?.data || null
