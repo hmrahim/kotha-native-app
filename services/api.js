@@ -1,5 +1,4 @@
 import axios from 'axios'
-import Constants from 'expo-constants'
 import { getAuth } from '../firebase/firebaseConfig'
 
 // Read from EXPO_PUBLIC_* env (set in .env) — falls back to extra in app.json
@@ -7,8 +6,8 @@ import { getAuth } from '../firebase/firebaseConfig'
 //   process.env.EXPO_PUBLIC_API_URL ||
 //   Constants.expoConfig?.extra?.apiUrl ||
 //   'http://localhost:5000/api'
-// const API_URL ='http://192.168.100.185:5000/api'
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.185:5000/api'
+const API_URL ='http://192.168.100.185:5000/api'
+// const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.185:5000/api'
 
 console.log('🌐 API base URL:', API_URL)
 

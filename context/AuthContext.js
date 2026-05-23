@@ -1,7 +1,7 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { getFirebaseAuth } from '../firebase/firebaseConfig'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { postUser, getCurrentUser } from '../services/api'
+import { getCurrentUser, postUser } from '../services/api'
 import { connectSocket, disconnectSocket } from '../services/socket'
 
 const AuthContext = createContext(null)

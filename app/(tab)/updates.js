@@ -1,33 +1,33 @@
 // app/(tab)/updates.js
 import { Ionicons } from '@expo/vector-icons'
-import { VideoView, useVideoPlayer } from 'expo-video'
 import * as ImagePicker from 'expo-image-picker'
+import { VideoView, useVideoPlayer } from 'expo-video'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Dimensions,
-  Image,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Dimensions,
+    Image,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../context/AuthContext'
 import {
-  createStory,
-  deleteStory,
-  getStories,
-  replyToStory,
-  viewStory,
+    createStory,
+    deleteStory,
+    getStories,
+    replyToStory,
+    viewStory,
 } from '../../services/api'
 import { uploadToCloudinary } from '../../services/cloudinary'
 import { getSocket } from '../../services/socket'

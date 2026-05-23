@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { T, getColor, getInitials } from '../theme'
 import { getSocket } from '../services/socket'
-import { useCall } from '../context/CallContext'   // ← ADD
+import { useCall } from '../context/CallContext'
 
 function HeaderAvatar({ name, avatar, online }) {
   return (
@@ -24,8 +24,8 @@ function HeaderAvatar({ name, avatar, online }) {
 
 export default function ChatHeader({ chat, onBack, onPressProfile }) {
   const { name, online, lastSeen, avater, receiverId } = chat
-  const router          = useRouter()
-  const { dispatch }    = useCall()   // ← ADD
+  const router       = useRouter()
+  const { dispatch } = useCall()
 
   const startCall = (type) => {
     const socket = getSocket()
@@ -41,17 +41,13 @@ export default function ChatHeader({ chat, onBack, onPressProfile }) {
         return Alert.alert('Error', ack?.error || 'Failed to start call')
       }
 
-      // ✅ FIX: CallContext এ OUTGOING dispatch করো
-      // token + uid এখানে save হবে, তাই call:accepted এ undefined আসবে না
+      // WebRTC call initiation
       dispatch({
         type: 'OUTGOING',
         payload: {
-          callId:      ack.callId,
-          channelName: ack.channelName,
+          callId: ack.callId,
+          roomId: ack.roomId,
           type,
-          token:       ack.token,
-          uid:         ack.uid,
-          appId:       ack.appId,
           peer: {
             _id:    receiverId,
             name:   name   || '',
@@ -63,15 +59,12 @@ export default function ChatHeader({ chat, onBack, onPressProfile }) {
       router.push({
         pathname: '/call',
         params: {
-          callId:      ack.callId,
-          channelName: ack.channelName,
+          callId:     ack.callId,
+          roomId:     ack.roomId,
           type,
-          token:       ack.token,
-          uid:         String(ack.uid),
-          appId:       ack.appId,
-          peerName:    name   || '',
-          peerAvatar:  avater || '',
-          outgoing:    '1',
+          peerName:   name   || '',
+          peerAvatar: avater || '',
+          outgoing:   '1',
         },
       })
     })

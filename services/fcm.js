@@ -1,6 +1,6 @@
 // services/fcm.js — Client-side FCM (React Native / Expo)
-import messaging from '@react-native-firebase/messaging'
 import notifee, { AndroidImportance, AndroidVisibility, EventType } from '@notifee/react-native'
+import messaging from '@react-native-firebase/messaging'
 import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
 import { getActiveChatUser } from './socket'

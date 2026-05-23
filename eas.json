@@ -12,7 +12,36 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "node": "20.19.4",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      }
+    },
+
+    "production-arm64": {
+      "autoIncrement": true,
+      "node": "20.19.4",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "ABI_FILTERS": "arm64-v8a"
+      }
+    },
+
+    "production-arm32": {
+      "autoIncrement": true,
+      "node": "20.19.4",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "ABI_FILTERS": "armeabi-v7a"
+      }
     }
   },
   "submit": {

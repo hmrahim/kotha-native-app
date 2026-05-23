@@ -1,16 +1,24 @@
-import React, { useState, useEffect } from 'react'
+import { Ionicons } from '@expo/vector-icons'
+import * as ImagePicker from 'expo-image-picker'
+import { Stack, useRouter } from 'expo-router'
+import { useEffect, useState } from 'react'
 import {
-  View, Text, StyleSheet, TouchableOpacity, TextInput,
-  Image, ScrollView, Alert, ActivityIndicator, StatusBar, Dimensions,
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    Image, ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter, Stack } from 'expo-router'
-import * as ImagePicker from 'expo-image-picker'
-import { Ionicons } from '@expo/vector-icons'
-import { T, getColor, getInitials } from '../theme'
 import { useAuth } from '../context/AuthContext'
-import { updateProfile, getCurrentUser } from '../services/api'
+import { getCurrentUser, updateProfile } from '../services/api'
 import { uploadToCloudinary } from '../services/cloudinary'
+import { T, getColor, getInitials } from '../theme'
 
 const { width } = Dimensions.get('window')
 const COVER_H = 180

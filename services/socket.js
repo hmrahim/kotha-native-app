@@ -1,6 +1,6 @@
 // services/socket.js
-import { io } from 'socket.io-client'
 import { Platform } from 'react-native'
+import { io } from 'socket.io-client'
 
 const SERVER_URL = 'http://192.168.100.185:5000'
 

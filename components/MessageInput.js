@@ -1,16 +1,25 @@
-import React, { useState, useRef, useCallback } from 'react'
-import {
-  View, TextInput, TouchableOpacity, Text, Image,
-  StyleSheet, Platform, ScrollView, Animated,
-} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import React, { useCallback, useRef, useState } from 'react'
+import {
+    Image,
+    Platform, ScrollView,
+    StyleSheet,
+    Text,
+    TextInput, TouchableOpacity,
+    View
+} from 'react-native'
+import {
+    pickAudio,
+    pickContact,
+    pickDocument,
+    pickFromCamera,
+    pickFromGallery,
+    shareCurrentLocation,
+    uploadVoice,
+} from '../services/mediaPickers'
 import { T } from '../theme'
 import AttachmentMenu from './AttachmentMenu'
 import VoiceRecorder from './VoiceRecorder'
-import {
-  pickFromGallery, pickFromCamera, pickDocument, pickAudio,
-  shareCurrentLocation, pickContact, uploadVoice,
-} from '../services/mediaPickers'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WhatsApp-style full emoji dataset — all categories

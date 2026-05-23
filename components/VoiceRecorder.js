@@ -1,14 +1,19 @@
 
 
-import React, { useEffect, useRef, useState } from 'react'
-import {
-  View, Text, StyleSheet, Animated, PanResponder, TouchableOpacity,
-} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import {
-  useAudioRecorder, RecordingPresets, setAudioModeAsync,
-  AudioModule,
+    AudioModule,
+    RecordingPresets, setAudioModeAsync,
+    useAudioRecorder,
 } from 'expo-audio'
+import { useEffect, useRef, useState } from 'react'
+import {
+    Animated, PanResponder,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native'
 import { T } from '../theme'
 
 const fmt = (sec) => {
