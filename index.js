@@ -4,15 +4,22 @@ import notifee, { AndroidImportance, AndroidVisibility, EventType } from '@notif
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import messaging from '@react-native-firebase/messaging'
 
+// ⚠️ IMPORTANT: এই file টা app killed/background state এ headless JS হিসেবে run হয়।
+// এখানে কোনো React component বা context use করা যাবে না।
+// শুধু raw JS — AsyncStorage, fetch, notifee।
+
 const API_URL = 'http://192.168.100.185:5000/api'
 
 // ─── Channel Setup ────────────────────────────────────────────────────────────
+// App killed state এও channel exist করা দরকার।
+// sound নাম = asset file নাম WITHOUT extension (Android নিজেই খোঁজে)
+// ringtun.mp3 → 'ringtun', received.mp3 → 'received'
 async function setupChannels() {
   await notifee.createChannel({
     id: 'incoming_call',
     name: 'Incoming Calls',
     importance: AndroidImportance.HIGH,
-    sound: 'ringtone',
+    sound: 'ringtun',          // ✅ FIX: 'ringtone' → 'ringtun' (actual filename)
     vibration: true,
     vibrationPattern: [100, 1000, 500, 1000],
     bypassDnd: true,
@@ -23,7 +30,7 @@ async function setupChannels() {
     id: 'messages',
     name: 'Messages',
     importance: AndroidImportance.HIGH,
-    sound: 'received',
+    sound: 'received',         // ✅ received.mp3 → 'received'
     vibration: true,
     vibrationPattern: [100, 250, 100, 250],
   })
@@ -46,16 +53,17 @@ async function showCallNotification(data) {
         fullScreenAction: { id: 'default', launchActivity: 'default' },
         pressAction:      { id: 'default', launchActivity: 'default' },
         actions: [
-          { title: 'Accept',  pressAction: { id: 'accept',  launchActivity: 'default' } },
-          { title: 'Decline', pressAction: { id: 'decline' } },
+          { title: '✅ Accept',  pressAction: { id: 'accept',  launchActivity: 'default' } },
+          { title: '❌ Decline', pressAction: { id: 'decline' } },
         ],
-        sound:            'ringtone',
+        sound:            'ringtun',    // ✅ FIX: actual filename
         vibrationPattern: [100, 1000, 500, 1000],
         lights:           ['#0084FF', 500, 500],
         ongoing:          true,
         autoCancel:       false,
         wakeUpScreen:     true,
         showChronometer:  false,
+        asForegroundService: false,
       },
     })
     console.log('[BG] ✅ Call notification displayed, callId:', data.callId)
@@ -65,17 +73,20 @@ async function showCallNotification(data) {
 }
 
 // ─── Show Message Notification ────────────────────────────────────────────────
-async function showMessageNotification(data, notification = {}) {
+async function showMessageNotification(data) {
   try {
     await notifee.displayNotification({
-      title: data.senderName || notification?.title || 'New message',
-      body:  data.body       || notification?.body  || 'Sent you a message',
+      title: data.senderName || data.title || 'New message',
+      body:  data.body       || 'Sent you a message',
       android: {
         channelId:   'messages',
+        sound:       'received',   // ✅ explicit sound
         pressAction: { id: 'default', launchActivity: 'default' },
+        importance:  AndroidImportance.HIGH,
       },
       data,
     })
+    console.log('[BG] ✅ Message notification displayed')
   } catch (e) {
     console.warn('[BG] showMessageNotification error:', e?.message)
   }
@@ -84,6 +95,7 @@ async function showMessageNotification(data, notification = {}) {
 // ─── Reject Call via HTTP ─────────────────────────────────────────────────────
 async function rejectCallHttp(callId) {
   try {
+    // ✅ Auth token ছাড়াই reject করতে পারবে (server এ এই endpoint open রাখো)
     await fetch(`${API_URL}/calls/${callId}/reject`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -108,11 +120,14 @@ async function saveCallAccept(data) {
   }
 }
 
-// ─── 1. FCM Background Handler (App killed / background) ─────────────────────
+// ─── 1. FCM Background/Killed Handler ────────────────────────────────────────
+// ✅ KEY FIX: এই handler শুধু কাজ করবে যদি FCM payload DATA-ONLY হয়।
+// Server থেকে পাঠাতে হবে:
+//   { data: { type, ... } }           ← ✅ সঠিক (data-only)
+//   { notification: {...}, data: {} } ← ❌ ভুল (Android নিজে handle করে, handler fire হয় না)
 messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-  const data         = remoteMessage?.data || {}
-  const notification = remoteMessage?.notification || {}
-  console.log('[BG] FCM background message, type:', data?.type)
+  const data = remoteMessage?.data || {}
+  console.log('[BG] FCM background/killed message received, type:', data?.type)
 
   if (data?.type === 'incoming_call' && data?.callId) {
     await showCallNotification(data)
@@ -120,33 +135,46 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   }
 
   if (data?.type === 'message') {
-    await showMessageNotification(data, notification)
+    await showMessageNotification(data)
+    return
   }
+
+  console.warn('[BG] Unknown FCM type:', data?.type)
 })
 
-// ─── 2. Notifee Background Event (Button press / notification tap) ────────────
+// ─── 2. Notifee Background Event ─────────────────────────────────────────────
+// App killed/background এ notification button press handle করে
 notifee.onBackgroundEvent(async ({ type, detail }) => {
   const { notification, pressAction } = detail
   const data = notification?.data || {}
   console.log('[BG] Notifee background event, type:', type, 'action:', pressAction?.id)
 
+  // Notification এ tap (body press)
   if (type === EventType.PRESS) {
     await notifee.cancelNotification(notification.id)
 
     if (data?.type === 'incoming_call') {
+      // Call notification tap = accept হিসেবে ধরো
       await saveCallAccept(data)
       return
     }
 
     if (data?.type === 'message') {
-      await AsyncStorage.setItem(
-        '@pendingMessageTap',
-        JSON.stringify({ senderId: data.senderId, senderName: data.senderName })
-      )
+      try {
+        await AsyncStorage.setItem(
+          '@pendingMessageTap',
+          JSON.stringify({
+            senderId:   data.senderId,
+            senderName: data.senderName,
+            senderAvatar: data.senderAvatar || '',
+          })
+        )
+      } catch (_) {}
       return
     }
   }
 
+  // Action button press (Accept / Decline)
   if (type === EventType.ACTION_PRESS) {
     await notifee.cancelNotification(notification.id)
 
@@ -155,6 +183,13 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     }
 
     if (pressAction?.id === 'decline' && data?.callId) {
+      await rejectCallHttp(data.callId)
+    }
+  }
+
+  // Notification dismissed (swipe away)
+  if (type === EventType.DISMISSED) {
+    if (data?.type === 'incoming_call' && data?.callId) {
       await rejectCallHttp(data.callId)
     }
   }
