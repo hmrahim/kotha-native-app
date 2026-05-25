@@ -54,16 +54,15 @@
         "android.permission.WAKE_LOCK",
         "android.permission.DISABLE_KEYGUARD",
         "android.permission.SYSTEM_ALERT_WINDOW",
-
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.INTERNET",
-
-        "android.permission.USE_FULL_SCREEN_INTENT",
-
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
-
         "android.permission.TURN_SCREEN_ON",
-        "android.permission.SHOW_WHEN_LOCKED"
+        "android.permission.SHOW_WHEN_LOCKED",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
       "usesCleartextTraffic": true
     },
@@ -146,7 +145,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "7dacc4a6-f62a-47a2-a2b1-4ef18d5f4766"
+        "projectId": "7a81b1fd-1a5b-4234-91c5-164a07f3a5d9"
       }
     }
   }

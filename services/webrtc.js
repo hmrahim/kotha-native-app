@@ -10,8 +10,9 @@ import {
   boostVideoEncoding,
   getEnhancedVideoConstraints,
   getFallbackVideoConstraints,
+  optimizeAudioSdp,           // ✅ নতুন
 } from './Videoenhancer'
-
+import { Audio } from 'expo-av'
 // ─── InCallManager (speaker routing) ─────────────────────────────────────────
 let InCallManager = null
 try {
@@ -76,28 +77,46 @@ export const requestCallPermissions = async (type = 'voice') => {
 }
 
 // ─── Speaker routing ──────────────────────────────────────────────────────────
-export const setSpeaker = (forceSpeaker) => {
-  if (!InCallManager || Platform.OS === 'web') return
+export const setSpeaker = async (forceSpeaker) => {
+  if (Platform.OS === 'web') return
   try {
-    InCallManager.setSpeakerphoneOn(forceSpeaker)
-    // ✅ FIX: setForceSpeakerphoneOn দিয়ে OS-level override করা হচ্ছে
-    // এটা ছাড়া কিছু Android device এ volume কম থাকে
-    InCallManager.setForceSpeakerphoneOn(forceSpeaker)
-    console.log(`[WebRTC] 🔊 Speaker ${forceSpeaker ? 'ON' : 'OFF'}`)
+    // expo-av দিয়ে OS-level audio routing
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: true,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: !forceSpeaker, // true = earpiece, false = loud speaker
+    })
+    // InCallManager থাকলে সেটাও call করো
+    if (InCallManager) {
+      InCallManager.setSpeakerphoneOn(forceSpeaker)
+    }
+    console.log(`[WebRTC] 🔊 Speaker ${forceSpeaker ? 'ON (loud)' : 'OFF (earpiece)'}`)
   } catch (err) {
     console.warn('[WebRTC] setSpeaker error:', err)
   }
 }
 
 // ─── Start InCallManager ──────────────────────────────────────────────────────
-export const startAudioSession = (media = 'audio') => {
-  if (!InCallManager || Platform.OS === 'web') return
+export const startAudioSession = async (media = 'audio') => {
+  if (Platform.OS === 'web') return
   try {
-    InCallManager.start({ media, ringback: '' })
-    if (media === 'video') {
-      // ✅ FIX: speaker on + volume maximum force করা হচ্ছে
-      InCallManager.setSpeakerphoneOn(true)
-      InCallManager.setForceSpeakerphoneOn(true)
+    // expo-av দিয়ে audio session configure করো
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: true,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: media !== 'video', // video = speaker, audio = earpiece
+    })
+    if (InCallManager) {
+      InCallManager.start({ media, ringback: '' })
+      if (media === 'video') {
+        InCallManager.setSpeakerphoneOn(true)
+      } else {
+        InCallManager.setSpeakerphoneOn(false)
+      }
     }
     console.log(`[WebRTC] 🎙️ Audio session started (${media})`)
   } catch (err) {
@@ -122,13 +141,23 @@ export const stopAudioSession = () => {
 export const initLocalStream = async (isVideo = false) => {
   try {
     const constraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl:  true,
-        sampleRate:       48000,
-        channelCount:     1,
-      },
+  audio: {
+  echoCancellation:        true,
+  noiseSuppression:        true,
+  autoGainControl:         true,
+  sampleRate:              48000,
+  channelCount:            1,
+  // ✅ Google WebRTC advanced noise processing
+  googNoiseSuppression:    true,
+  googNoiseSuppression2:   true,   // 2nd-pass suppression
+  googEchoCancellation:    true,
+  googEchoCancellation2:   true,
+  googAutoGainControl:     true,
+  googAutoGainControl2:    true,
+  googHighpassFilter:      true,   // low-freq hum (fan, AC) কাটে
+  googTypingNoiseDetection:true,   // keyboard noise কাটে
+  googAudioMirroring:      false,
+},
       video: isVideo ? getEnhancedVideoConstraints() : false,
     }
 
@@ -228,8 +257,9 @@ export const createOffer = async () => {
     offerToReceiveVideo: true,
   })
   // SDP bitrate boost
-  const boostedSdp    = boostSdpBitrate(offer.sdp)
-  const boostedOffer  = { ...offer, sdp: boostedSdp }
+const boostedSdp   = boostSdpBitrate(offer.sdp)
+const boostedOffer = { ...offer, sdp: boostedSdp }
+
   await peerConnection.setLocalDescription(boostedOffer)
   console.log('[WebRTC] ✅ Offer created (SDP boosted)')
   return boostedOffer
@@ -241,8 +271,8 @@ export const createAnswer = async () => {
   if (!peerConnection) throw new Error('No peer connection')
   const answer = await peerConnection.createAnswer()
   // SDP bitrate boost
-  const boostedSdp    = boostSdpBitrate(answer.sdp)
-  const boostedAnswer = { ...answer, sdp: boostedSdp }
+const boostedSdp    = boostSdpBitrate(answer.sdp)
+const boostedAnswer = { ...answer, sdp: boostedSdp }
   await peerConnection.setLocalDescription(boostedAnswer)
   console.log('[WebRTC] ✅ Answer created (SDP boosted)')
   return boostedAnswer

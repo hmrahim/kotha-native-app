@@ -17,7 +17,6 @@ import { preWarmForCall, getLocalStream } from '../services/webrtc'
 import { getSocket } from '../services/socket'
 import { stopRingtone } from '../services/sounds'
 
-// RTCView — only on native
 let RTCView = null
 if (Platform.OS !== 'web') {
   try { RTCView = require('react-native-webrtc').RTCView } catch (_) {}
@@ -26,116 +25,205 @@ if (Platform.OS !== 'web') {
 const { width: W, height: H } = Dimensions.get('window')
 
 const C = {
-  bg: '#000000',
-  green: '#31A24C',
-  red: '#FA3E3E',
-  white: '#FFFFFF',
-  whiteD: 'rgba(255,255,255,0.72)',
-  whiteDD: 'rgba(255,255,255,0.40)',
-  accent: '#0084FF',
+  bg:        '#060A12',
+  green:     '#00E5A0',
+  greenDark: '#00B87A',
+  red:       '#FF4560',
+  redDark:   '#CC2A40',
+  white:     '#FFFFFF',
+  whiteD:    'rgba(255,255,255,0.75)',
+  whiteDD:   'rgba(255,255,255,0.40)',
+  accent:    '#4F8EF7',
+  accentGlow:'rgba(79,142,247,0.35)',
+  glass:     'rgba(255,255,255,0.06)',
+  glassBorder:'rgba(255,255,255,0.12)',
 }
 
-const safeStop = () => {
-  try { stopRingtone() } catch (_) {}
+const safeStop = () => { try { stopRingtone() } catch (_) {} }
+
+// ── Animated gradient orbs in background ──────────────────────────────────
+function BackgroundOrbs({ isVideo }) {
+  const orb1 = useRef(new Animated.Value(0)).current
+  const orb2 = useRef(new Animated.Value(0)).current
+  const orb3 = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const loop = (val, duration, delay) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(val, { toValue: 1, duration, useNativeDriver: true }),
+          Animated.timing(val, { toValue: 0, duration, useNativeDriver: true }),
+        ])
+      ).start()
+
+    loop(orb1, 3500, 0)
+    loop(orb2, 4200, 700)
+    loop(orb3, 3800, 1400)
+  }, [])
+
+  if (isVideo) return null
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {/* Top-left teal orb */}
+      <Animated.View style={[s.orb, {
+        width: W * 0.85,
+        height: W * 0.85,
+        borderRadius: W * 0.425,
+        top: -W * 0.3,
+        left: -W * 0.25,
+        backgroundColor: 'rgba(0,180,150,0.13)',
+        opacity: orb1.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
+        transform: [{ scale: orb1.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }) }],
+      }]} />
+      {/* Bottom-right blue orb */}
+      <Animated.View style={[s.orb, {
+        width: W * 0.9,
+        height: W * 0.9,
+        borderRadius: W * 0.45,
+        bottom: -W * 0.2,
+        right: -W * 0.3,
+        backgroundColor: 'rgba(79,142,247,0.12)',
+        opacity: orb2.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }),
+        transform: [{ scale: orb2.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }) }],
+      }]} />
+      {/* Center accent orb */}
+      <Animated.View style={[s.orb, {
+        width: W * 0.5,
+        height: W * 0.5,
+        borderRadius: W * 0.25,
+        top: H * 0.35,
+        left: W * 0.25,
+        backgroundColor: 'rgba(79,142,247,0.07)',
+        opacity: orb3.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0.9] }),
+        transform: [{ scale: orb3.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }) }],
+      }]} />
+    </View>
+  )
 }
 
+// ── Pulsing ring ──────────────────────────────────────────────────────────
+function RippleRing({ delay, color }) {
+  const scale = useRef(new Animated.Value(1)).current
+  const opacity = useRef(new Animated.Value(0.5)).current
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.delay(delay),
+        Animated.parallel([
+          Animated.timing(scale,   { toValue: 1.7, duration: 1600, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0,   duration: 1600, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scale,   { toValue: 1, duration: 0, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0.5, duration: 0, useNativeDriver: true }),
+        ]),
+      ])
+    ).start()
+  }, [])
+
+  return (
+    <Animated.View style={[s.rippleRing, {
+      borderColor: color,
+      transform: [{ scale }],
+      opacity,
+    }]} />
+  )
+}
+
+// ── Slide-up action button ────────────────────────────────────────────────
+function ActionBtn({ icon, color, colorDark, label, onPress, slideAnim }) {
+  const pressScale = useRef(new Animated.Value(1)).current
+
+  const onIn  = () => Animated.spring(pressScale, { toValue: 0.88, useNativeDriver: true, speed: 80 }).start()
+  const onOut = () => Animated.spring(pressScale, { toValue: 1,    useNativeDriver: true, speed: 60 }).start()
+
+  return (
+    <Animated.View style={{ transform: [{ translateY: slideAnim }, { scale: pressScale }], alignItems: 'center', gap: 14 }}>
+      <TouchableOpacity
+        onPress={onPress}
+        onPressIn={onIn}
+        onPressOut={onOut}
+        activeOpacity={1}
+      >
+        {/* Outer glow ring */}
+        <View style={[s.btnGlow, { shadowColor: color }]}>
+          {/* Glass ring */}
+          <View style={[s.btnRing, { borderColor: color + '55' }]}>
+            {/* Filled button */}
+            <View style={[s.btnInner, { backgroundColor: color }]}>
+              <Ionicons name={icon} size={30} color="#fff" />
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+      <Text style={s.btnLabel}>{label}</Text>
+    </Animated.View>
+  )
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────
 export default function IncomingCallScreen() {
-  const router = useRouter()
+  const router       = useRouter()
   const { state, dispatch } = useCall()
   const acceptingRef = useRef(false)
-
-  // Local camera stream for video preview
   const [localStream, setLocalStream] = useState(null)
-
-  // Animations
-  const bgScale   = useRef(new Animated.Value(1.08)).current
-  const avatarScale = useRef(new Animated.Value(0.85)).current
-  const contentY  = useRef(new Animated.Value(30)).current
-  const contentOp = useRef(new Animated.Value(0)).current
-  const btnScale  = useRef(new Animated.Value(0)).current
-  const ripple1   = useRef(new Animated.Value(1)).current
-  const ripple2   = useRef(new Animated.Value(1)).current
-  const ripple1Op = useRef(new Animated.Value(0.35)).current
-  const ripple2Op = useRef(new Animated.Value(0.2)).current
-  const camFadeIn = useRef(new Animated.Value(0)).current
 
   const isVideo = state.type === 'video'
   const avatar  = state.peer?.avatar
   const name    = state.peer?.name || 'Unknown'
 
-  // ── Pre-warm WebRTC + get camera stream for video calls ────────────────
+  // Entry animations
+  const headerY   = useRef(new Animated.Value(-40)).current
+  const headerOp  = useRef(new Animated.Value(0)).current
+  const avatarSc  = useRef(new Animated.Value(0.6)).current
+  const avatarOp  = useRef(new Animated.Value(0)).current
+  const nameY     = useRef(new Animated.Value(20)).current
+  const nameOp    = useRef(new Animated.Value(0)).current
+  const declineY  = useRef(new Animated.Value(80)).current
+  const acceptY   = useRef(new Animated.Value(80)).current
+  const camOp     = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    Animated.stagger(80, [
+      Animated.parallel([
+        Animated.timing(headerY,  { toValue: 0, duration: 500, useNativeDriver: true }),
+        Animated.timing(headerOp, { toValue: 1, duration: 500, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.spring(avatarSc, { toValue: 1, tension: 70, friction: 7, useNativeDriver: true }),
+        Animated.timing(avatarOp, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.timing(nameY,  { toValue: 0, duration: 400, useNativeDriver: true }),
+        Animated.timing(nameOp, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ]),
+      Animated.timing(declineY, { toValue: 0, duration: 500, useNativeDriver: true }),
+      Animated.timing(acceptY,  { toValue: 0, duration: 500, useNativeDriver: true }),
+    ]).start()
+  }, [])
+
+  // Pre-warm WebRTC
   useEffect(() => {
     if (!state.type) return
     let cancelled = false
-
-    const warmUp = async () => {
+    ;(async () => {
       try {
         await preWarmForCall(state.type)
-        if (cancelled) return
-
-        if (state.type === 'video') {
-          // preWarmForCall already called initLocalStream, just grab it
-          const stream = getLocalStream()
-          if (stream && !cancelled) {
-            setLocalStream(stream)
-            // Fade in camera preview smoothly
-            Animated.timing(camFadeIn, {
-              toValue: 1,
-              duration: 600,
-              useNativeDriver: true,
-            }).start()
-          }
+        if (cancelled || state.type !== 'video') return
+        const stream = getLocalStream()
+        if (stream && !cancelled) {
+          setLocalStream(stream)
+          Animated.timing(camOp, { toValue: 1, duration: 600, useNativeDriver: true }).start()
         }
-      } catch (err) {
-        console.warn('[IncomingCall] preWarm error:', err)
-      }
-    }
-
-    warmUp()
+      } catch (e) { console.warn('[IncomingCall] preWarm:', e) }
+    })()
     return () => { cancelled = true }
   }, [state.type])
 
-  // ── Entry animations ───────────────────────────────────────────────────
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(bgScale, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.timing(avatarScale, { toValue: 1, duration: 500, useNativeDriver: true, delay: 100 }),
-      Animated.timing(contentOp, { toValue: 1, duration: 400, useNativeDriver: true, delay: 150 }),
-      Animated.timing(contentY, { toValue: 0, duration: 400, useNativeDriver: true, delay: 150 }),
-      Animated.spring(btnScale, { toValue: 1, useNativeDriver: true, tension: 90, friction: 7, delay: 300 }),
-    ]).start()
-
-    const rLoop1 = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(ripple1, { toValue: 1.55, duration: 1200, useNativeDriver: true }),
-          Animated.timing(ripple1Op, { toValue: 0, duration: 1200, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(ripple1, { toValue: 1, duration: 0, useNativeDriver: true }),
-          Animated.timing(ripple1Op, { toValue: 0.35, duration: 0, useNativeDriver: true }),
-        ]),
-      ])
-    )
-    const rLoop2 = Animated.loop(
-      Animated.sequence([
-        Animated.delay(600),
-        Animated.parallel([
-          Animated.timing(ripple2, { toValue: 1.55, duration: 1200, useNativeDriver: true }),
-          Animated.timing(ripple2Op, { toValue: 0, duration: 1200, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(ripple2, { toValue: 1, duration: 0, useNativeDriver: true }),
-          Animated.timing(ripple2Op, { toValue: 0.2, duration: 0, useNativeDriver: true }),
-        ]),
-      ])
-    )
-    rLoop1.start()
-    rLoop2.start()
-    return () => { rLoop1.stop(); rLoop2.stop() }
-  }, [])
-
-  // ── Auto-close if call state changes ──────────────────────────────────
+  // Auto-close
   useEffect(() => {
     if (state.phase !== 'incoming') {
       if (acceptingRef.current) return
@@ -144,36 +232,31 @@ export default function IncomingCallScreen() {
     }
   }, [state.phase])
 
-  // ── Accept ─────────────────────────────────────────────────────────────
   const handleAccept = useCallback(async () => {
     if (acceptingRef.current) return
     acceptingRef.current = true
-
     safeStop()
-
     const socket = getSocket()
     if (!socket || !state.callId) {
       dispatch({ type: 'RESET' })
       try { router.back() } catch (_) {}
       return
     }
-
     socket.emit('call:accept', { callId: state.callId }, (response) => {
       if (response?.ok) {
         const { roomId, type, caller } = response
         router.replace({
           pathname: '/call',
           params: {
-            callId: state.callId,
+            callId:     state.callId,
             roomId,
             type,
-            peerName: caller?.name || 'User',
+            peerName:   caller?.name   || 'User',
             peerAvatar: caller?.avatar || '',
-            outgoing: '0',
+            outgoing:   '0',
           },
         })
       } else {
-        console.error('[Incoming] Accept failed:', response?.error)
         acceptingRef.current = false
         dispatch({ type: 'RESET' })
         try { router.back() } catch (_) {}
@@ -181,248 +264,336 @@ export default function IncomingCallScreen() {
     })
   }, [state.callId, state.type, dispatch, router])
 
-  // ── Reject ─────────────────────────────────────────────────────────────
   const handleReject = useCallback(() => {
     safeStop()
     const socket = getSocket()
-    if (socket && state.callId) {
-      socket.emit('call:reject', { callId: state.callId })
-    }
+    if (socket && state.callId) socket.emit('call:reject', { callId: state.callId })
     dispatch({ type: 'RESET' })
     try { router.back() } catch (_) {}
   }, [state.callId, dispatch, router])
 
-  // ── Render local camera background (video call only) ───────────────────
-  const renderCameraBackground = () => {
-    if (!isVideo || !localStream) return null
-
-    // Native: use RTCView
-    if (Platform.OS !== 'web' && RTCView) {
-      return (
-        <Animated.View style={[s.camBg, { opacity: camFadeIn }]}>
-          <RTCView
-            streamURL={localStream.toURL()}
-            style={StyleSheet.absoluteFill}
-            objectFit="cover"
-            mirror={true}
-          />
-          {/* Dark gradient overlay so text stays readable */}
-          <View style={s.camOverlay} />
-        </Animated.View>
-      )
-    }
-
-    // Web: use <video> element
-    return (
-      <Animated.View style={[s.camBg, { opacity: camFadeIn }]}>
-        <WebCameraView stream={localStream} />
-        <View style={s.camOverlay} />
-      </Animated.View>
-    )
-  }
-
   return (
     <View style={s.root}>
-      <StatusBar barStyle="light-content" backgroundColor={C.bg} translucent />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-      {/* ── Camera background (video) or solid black (voice) ── */}
-      {isVideo ? (
-        renderCameraBackground()
+      {/* ── Background ── */}
+      {isVideo && localStream ? (
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity: camOp }]}>
+          {Platform.OS !== 'web' && RTCView ? (
+            <RTCView streamURL={localStream.toURL()} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          ) : null}
+          <View style={s.videoOverlay} />
+        </Animated.View>
       ) : (
-        <Animated.View style={[s.bgGrad, { transform: [{ scale: bgScale }] }]} />
+        <BackgroundOrbs isVideo={isVideo} />
       )}
 
+      {/* ── Subtle grid overlay ── */}
+      <View style={s.gridOverlay} pointerEvents="none" />
+
+      {/* ── Content ── */}
       <View style={s.content}>
-        <Animated.View
-          style={[s.topSection, { opacity: contentOp, transform: [{ translateY: contentY }] }]}
-        >
-          {/* "Incoming Video Call" label */}
-          <Text style={s.label}>Incoming {isVideo ? 'Video' : 'Voice'} Call</Text>
 
-          <View style={s.avatarWrap}>
-            <Animated.View style={[s.ripple, { transform: [{ scale: ripple1 }], opacity: ripple1Op }]} />
-            <Animated.View style={[s.ripple, { transform: [{ scale: ripple2 }], opacity: ripple2Op }]} />
+        {/* ── Header badge ── */}
+        <Animated.View style={[s.headerWrap, { opacity: headerOp, transform: [{ translateY: headerY }] }]}>
+          <View style={s.headerBadge}>
+            <View style={s.headerDot} />
+            <Text style={s.headerText}>
+              Incoming {isVideo ? 'Video' : 'Voice'} Call
+            </Text>
+          </View>
+        </Animated.View>
 
-            <Animated.View style={[s.avatarOuter, { transform: [{ scale: avatarScale }] }]}>
-              {avatar ? (
-                <Image source={{ uri: avatar }} style={s.avatar} />
-              ) : (
-                <View style={[s.avatar, s.avatarFb]}>
-                  <Text style={s.avatarLetter}>{name[0]?.toUpperCase() || '?'}</Text>
-                </View>
-              )}
+        {/* ── Avatar section ── */}
+        <View style={s.avatarSection}>
+          {/* Ripple rings */}
+          <View style={s.rippleWrap}>
+            <RippleRing delay={0}    color={isVideo ? C.accent : C.green} />
+            <RippleRing delay={550}  color={isVideo ? C.accent : C.green} />
+            <RippleRing delay={1100} color={isVideo ? C.accent : C.green} />
+
+            {/* Avatar container */}
+            <Animated.View style={[s.avatarContainer, {
+              opacity:   avatarOp,
+              transform: [{ scale: avatarSc }],
+            }]}>
+              {/* Glass border ring */}
+              <View style={[s.avatarGlassRing, { borderColor: isVideo ? C.accent + '60' : C.green + '60' }]}>
+                {avatar ? (
+                  <Image source={{ uri: avatar }} style={s.avatarImg} />
+                ) : (
+                  <View style={[s.avatarFallback, { backgroundColor: isVideo ? C.accent + '30' : C.green + '20' }]}>
+                    <Text style={[s.avatarLetter, { color: isVideo ? C.accent : C.green }]}>
+                      {name[0]?.toUpperCase() || '?'}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </Animated.View>
           </View>
 
-          <Text style={s.name}>{name}</Text>
-          <View style={s.typePill}>
-            <Ionicons name={isVideo ? 'videocam' : 'call'} size={14} color={C.whiteD} />
-            <Text style={s.typeTxt}>{isVideo ? 'Video Call' : 'Voice Call'}</Text>
-          </View>
-        </Animated.View>
+          {/* Name + type */}
+          <Animated.View style={[s.nameWrap, { opacity: nameOp, transform: [{ translateY: nameY }] }]}>
+            <Text style={s.nameText} numberOfLines={1}>{name}</Text>
+            <View style={[s.typePill, { borderColor: isVideo ? C.accent + '40' : C.green + '40' }]}>
+              <Ionicons
+                name={isVideo ? 'videocam' : 'call'}
+                size={12}
+                color={isVideo ? C.accent : C.green}
+              />
+              <Text style={[s.typeText, { color: isVideo ? C.accent : C.green }]}>
+                {isVideo ? 'Video Call' : 'Voice Call'}
+              </Text>
+            </View>
+          </Animated.View>
+        </View>
 
-        {/* ── Accept / Decline buttons ── */}
-        <Animated.View style={[s.actions, { transform: [{ scale: btnScale }] }]}>
-          <ActionBtn icon="close"  color={C.red}   label="Decline" onPress={handleReject} />
-          <ActionBtn icon="call"   color={C.green}  label="Accept"  onPress={handleAccept} />
-        </Animated.View>
+        {/* ── Swipe hint ── */}
+        <Text style={s.swipeHint}>Tap to respond</Text>
+
+        {/* ── Action buttons ── */}
+        <View style={s.actionsRow}>
+          <ActionBtn
+            icon="close"
+            color={C.red}
+            colorDark={C.redDark}
+            label="Decline"
+            onPress={handleReject}
+            slideAnim={declineY}
+          />
+          <ActionBtn
+            icon={isVideo ? 'videocam' : 'call'}
+            color={C.green}
+            colorDark={C.greenDark}
+            label="Accept"
+            onPress={handleAccept}
+            slideAnim={acceptY}
+          />
+        </View>
+
       </View>
     </View>
   )
 }
 
-// ── Web camera fallback ────────────────────────────────────────────────────
+// ── Web cam fallback ───────────────────────────────────────────────────────
 function WebCameraView({ stream }) {
-  const videoRef = useRef(null)
-  useEffect(() => {
-    if (videoRef.current && stream) videoRef.current.srcObject = stream
-  }, [stream])
+  const ref = useRef(null)
+  useEffect(() => { if (ref.current && stream) ref.current.srcObject = stream }, [stream])
   return (
-    <video
-      ref={videoRef}
-      autoPlay
-      playsInline
-      muted
-      style={{
-        position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-        objectFit: 'cover', transform: 'scaleX(-1)',
-      }}
+    <video ref={ref} autoPlay playsInline muted
+      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
     />
-  )
-}
-
-// ── Action button ──────────────────────────────────────────────────────────
-function ActionBtn({ icon, color, label, onPress }) {
-  const scale = useRef(new Animated.Value(1)).current
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      onPressIn={() => Animated.spring(scale, { toValue: 0.85, useNativeDriver: true, speed: 60 }).start()}
-      onPressOut={() => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 60 }).start()}
-      activeOpacity={1}
-      style={s.actionWrap}
-    >
-      <Animated.View style={[s.actionBtn, { backgroundColor: color, transform: [{ scale }] }]}>
-        <Ionicons name={icon} size={32} color="#fff" />
-      </Animated.View>
-      <Text style={s.actionLabel}>{label}</Text>
-    </TouchableOpacity>
   )
 }
 
 // ── Styles ─────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
-
-  // Solid BG for voice calls
-  bgGrad: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0a0a0a',
+  root: {
+    flex: 1,
+    backgroundColor: C.bg,
   },
 
-  // Full-screen camera layer (video calls)
-  camBg: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
+  orb: {
+    position: 'absolute',
   },
-  // Semi-transparent dark overlay so caller info stays readable
-  camOverlay: {
+
+  // Subtle dot-grid overlay for texture
+  gridOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.48)',
+    opacity: 0.03,
+    backgroundColor: 'transparent',
+  },
+
+  videoOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6,10,18,0.55)',
   },
 
   content: {
     flex: 1,
-    paddingTop: Platform.OS === 'android' ? 60 : 80,
-    paddingBottom: Platform.OS === 'android' ? 40 : 60,
-    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 56 : 72,
+    paddingBottom: Platform.OS === 'android' ? 48 : 64,
+    paddingHorizontal: 28,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  topSection: {
+
+  // ── Header badge ──
+  headerWrap: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.glassBorder,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 24,
+  },
+  headerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: C.green,
+    shadowColor: C.green,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  headerText: {
+    color: C.whiteD,
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.6,
+  },
+
+  // ── Avatar ──
+  avatarSection: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  label: {
-    color: C.whiteDD,
-    fontSize: 15,
-    fontWeight: '500',
-    letterSpacing: 1,
-    marginBottom: 40,
+    gap: 32,
   },
 
-  avatarWrap: {
-    width: 200,
-    height: 200,
+  rippleWrap: {
+    width: 220,
+    height: 220,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 28,
   },
-  ripple: {
+
+  rippleRing: {
     position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: C.accent,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    borderWidth: 1.5,
   },
-  avatarOuter: {
-    width: 168,
-    height: 168,
-    borderRadius: 84,
-    padding: 4,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+
+  avatarContainer: {
+    // sits on top of ripples
+  },
+
+  avatarGlassRing: {
+    width: 148,
+    height: 148,
+    borderRadius: 74,
+    borderWidth: 2,
+    padding: 5,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     shadowColor: C.accent,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 30,
-    elevation: 20,
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+    elevation: 16,
   },
-  avatar: { width: 160, height: 160, borderRadius: 80 },
-  avatarFb: {
-    backgroundColor: C.accent + '66',
+
+  avatarImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 68,
+  },
+
+  avatarFallback: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 68,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarLetter: { color: C.white, fontSize: 64, fontWeight: '700' },
 
-  name: {
-    color: C.white,
-    fontSize: 32,
+  avatarLetter: {
+    fontSize: 56,
     fontWeight: '700',
-    letterSpacing: 0.5,
-    marginBottom: 12,
-    textShadowColor: 'rgba(0,0,0,0.7)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
   },
+
+  nameWrap: {
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  nameText: {
+    color: C.white,
+    fontSize: 34,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
+    maxWidth: W - 60,
+    textAlign: 'center',
+  },
+
   typePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1,
     paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingVertical: 6,
     borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  typeTxt: { color: C.whiteD, fontSize: 13, fontWeight: '600', letterSpacing: 0.3 },
 
-  actions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingHorizontal: 30,
+  typeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
-  actionWrap: { alignItems: 'center', gap: 12 },
-  actionBtn: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+
+  // ── Hint ──
+  swipeHint: {
+    color: C.whiteDD,
+    fontSize: 12,
+    letterSpacing: 1.2,
+    fontWeight: '500',
+    textTransform: 'uppercase',
+  },
+
+  // ── Buttons ──
+  actionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignSelf: 'stretch',
+    paddingHorizontal: 20,
+  },
+
+  btnGlow: {
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+    elevation: 16,
+    borderRadius: 44,
+  },
+
+  btnRing: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 14,
-    elevation: 12,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
-  actionLabel: { color: C.whiteD, fontSize: 15, fontWeight: '600', letterSpacing: 0.5 },
+
+  btnInner: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  btnLabel: {
+    color: C.whiteD,
+    fontSize: 14,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+  },
 })

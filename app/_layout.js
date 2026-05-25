@@ -123,11 +123,24 @@ const showIncomingScreen = (router, dispatch, data) => {
   try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) {}
 }
 
+// ─── Navigate from notification data ────────────────────────────────────────
 const navigateFromNotification = (router, data, dispatch) => {
   if (!data) return
 
-  if (data?.wasAccepted && data?.callId) {
+  // ✅ App killed → call accept (AsyncStorage থেকে)
+  if (data?.notifType === 'call_accept' || (data?.wasAccepted && data?.callId)) {
     acceptCallDirect(router, dispatch, data)
+    return
+  }
+
+  // ✅ App killed → message tap (AsyncStorage থেকে)
+  if (data?.notifType === 'message_tap' && data?.senderId) {
+    try {
+      router.push({
+        pathname: '/chat',
+        params: { id: data.senderId, name: data.senderName ?? 'Chat', avater: data.senderAvatar ?? '' },
+      })
+    } catch (_) {}
     return
   }
 
@@ -248,10 +261,11 @@ function AppNavigator() {
     const unsubForeground = setupForegroundHandler()
 
     const unsubNotifee = setupNotifeeListeners({
+      // ✅ Foreground message notification tap → chat screen
+      onTap: (data) => navigateFromNotification(router, data, dispatch),
       onAccept: (data) => {
         cancelCallNotification(data?.callId)
         if (!data?.callId) return
-        // ✅ Directly accept and go to /call
         acceptCallDirect(router, dispatch, data)
       },
       onDecline: (data) => {

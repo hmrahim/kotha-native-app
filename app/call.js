@@ -35,7 +35,7 @@ import { startRingback, stopRingback } from '../services/sounds'
 
 let RTCView = null
 if (Platform.OS !== 'web') {
-  try { RTCView = require('react-native-webrtc').RTCView } catch (_) {}
+  try { RTCView = require('react-native-webrtc').RTCView } catch (_) { }
 }
 
 function WebVideoView({ stream, mirror = false, style }) {
@@ -43,27 +43,165 @@ function WebVideoView({ stream, mirror = false, style }) {
   useEffect(() => { if (videoRef.current && stream) videoRef.current.srcObject = stream }, [stream])
   return (
     <video ref={videoRef} autoPlay playsInline muted={mirror}
-      style={{ width: '100%', height: '100%', objectFit: 'cover',
-        transform: mirror ? 'scaleX(-1)' : 'none', ...style }} />
+      style={{
+        width: '100%', height: '100%', objectFit: 'cover',
+        transform: mirror ? 'scaleX(-1)' : 'none', ...style
+      }} />
   )
 }
 
 const { width: W, height: H } = Dimensions.get('window')
 
-// PiP size constants
-const PIP_W = 100
-const PIP_H = 148
-const PIP_MARGIN = 14
-// Safe boundaries so PiP stays on screen
+const PIP_W = 108
+const PIP_H = 156
+const PIP_MARGIN = 16
 const PIP_MAX_X = W - PIP_W - PIP_MARGIN
-const PIP_MAX_Y = H - PIP_H - 120 // above controls bar
+const PIP_MAX_Y = H - PIP_H - 130
 
+// ── Design tokens ─────────────────────────────────────────────────────────────
 const C = {
-  bg: '#000000', accent: '#0084FF', green: '#31A24C', red: '#FA3E3E',
-  white: '#FFFFFF', whiteD: 'rgba(255,255,255,0.75)', whiteDD: 'rgba(255,255,255,0.42)',
-  ctrl: 'rgba(255,255,255,0.15)', ctrlOn: 'rgba(255,255,255,0.30)',
+  bg: '#050810',
+  surface: '#0D1220',
+  glass: 'rgba(255,255,255,0.06)',
+  glassBorder: 'rgba(255,255,255,0.11)',
+  accent: '#4F8EF7',
+  accentSoft: 'rgba(79,142,247,0.25)',
+  green: '#00E5A0',
+  greenSoft: 'rgba(0,229,160,0.20)',
+  red: '#FF4560',
+  redSoft: 'rgba(255,69,96,0.20)',
+  amber: '#FFB800',
+  white: '#FFFFFF',
+  whiteD: 'rgba(255,255,255,0.72)',
+  whiteDD: 'rgba(255,255,255,0.38)',
+  ctrl: 'rgba(255,255,255,0.09)',
+  ctrlBorder: 'rgba(255,255,255,0.13)',
+  ctrlActive: 'rgba(255,255,255,0.22)',
 }
 
+// ── Animated background — deep space orbs ─────────────────────────────────────
+function SpaceBackground({ accent }) {
+  const a1 = useRef(new Animated.Value(0)).current
+  const a2 = useRef(new Animated.Value(0)).current
+  const a3 = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const loop = (val, dur, delay) =>
+      Animated.loop(Animated.sequence([
+        Animated.delay(delay),
+        Animated.timing(val, { toValue: 1, duration: dur, useNativeDriver: true }),
+        Animated.timing(val, { toValue: 0, duration: dur, useNativeDriver: true }),
+      ])).start()
+    loop(a1, 4000, 0)
+    loop(a2, 5000, 800)
+    loop(a3, 3500, 1600)
+  }, [])
+
+  const color1 = accent === 'green'
+    ? 'rgba(0,229,160,0.10)' : 'rgba(79,142,247,0.10)'
+  const color2 = accent === 'green'
+    ? 'rgba(0,180,130,0.07)' : 'rgba(120,80,255,0.08)'
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Animated.View style={{
+        position: 'absolute',
+        width: W * 1.1, height: W * 1.1, borderRadius: W * 0.55,
+        top: -W * 0.4, left: -W * 0.15,
+        backgroundColor: color1,
+        opacity: a1.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }),
+        transform: [{ scale: a1.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }) }],
+      }} />
+      <Animated.View style={{
+        position: 'absolute',
+        width: W * 0.9, height: W * 0.9, borderRadius: W * 0.45,
+        bottom: -W * 0.1, right: -W * 0.25,
+        backgroundColor: color2,
+        opacity: a2.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] }),
+        transform: [{ scale: a2.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }) }],
+      }} />
+      <Animated.View style={{
+        position: 'absolute',
+        width: W * 0.6, height: W * 0.6, borderRadius: W * 0.3,
+        top: H * 0.38, left: W * 0.2,
+        backgroundColor: 'rgba(255,255,255,0.03)',
+        opacity: a3.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.8] }),
+        transform: [{ scale: a3.interpolate({ inputRange: [0, 1], outputRange: [1, 1.25] }) }],
+      }} />
+    </View>
+  )
+}
+
+// ── Pulsing rings around avatar (waiting state) ───────────────────────────────
+function PulseRings({ color, active }) {
+  const r1s = useRef(new Animated.Value(1)).current
+  const r1o = useRef(new Animated.Value(0.45)).current
+  const r2s = useRef(new Animated.Value(1)).current
+  const r2o = useRef(new Animated.Value(0.28)).current
+  const r3s = useRef(new Animated.Value(1)).current
+  const r3o = useRef(new Animated.Value(0.15)).current
+
+  useEffect(() => {
+    if (!active) return
+    const ring = (scale, opacity, delay) =>
+      Animated.loop(Animated.sequence([
+        Animated.delay(delay),
+        Animated.parallel([
+          Animated.timing(scale, { toValue: 1.85, duration: 1800, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0, duration: 1800, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scale, { toValue: 1, duration: 0, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: opacity === r1o ? 0.45 : opacity === r2o ? 0.28 : 0.15, duration: 0, useNativeDriver: true }),
+        ]),
+      ])).start()
+
+    ring(r1s, r1o, 0)
+    ring(r2s, r2o, 600)
+    ring(r3s, r3o, 1200)
+  }, [active])
+
+  return (
+    <View style={{ position: 'absolute', width: 200, height: 200, alignItems: 'center', justifyContent: 'center' }}>
+      {[{ s: r3s, o: r3o }, { s: r2s, o: r2o }, { s: r1s, o: r1o }].map((r, i) => (
+        <Animated.View key={i} style={{
+          position: 'absolute',
+          width: 170, height: 170, borderRadius: 85,
+          borderWidth: 1.5, borderColor: color,
+          transform: [{ scale: r.s }], opacity: r.o,
+        }} />
+      ))}
+    </View>
+  )
+}
+
+// ── Control button ────────────────────────────────────────────────────────────
+function CtrlBtn({ icon, label, onPress, active = false, danger = false }) {
+  const sc = useRef(new Animated.Value(1)).current
+  const bgColor = danger ? C.red : active ? C.ctrlActive : C.ctrl
+  const borderColor = danger ? 'rgba(255,69,96,0.5)' : active ? C.ctrlBorder : C.ctrlBorder
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      onPressIn={() => Animated.spring(sc, { toValue: 0.84, useNativeDriver: true, speed: 80 }).start()}
+      onPressOut={() => Animated.spring(sc, { toValue: 1, useNativeDriver: true, speed: 60 }).start()}
+      activeOpacity={1}
+      style={s.ctrlWrap}
+    >
+      <Animated.View style={[s.ctrl, { backgroundColor: bgColor, borderColor, transform: [{ scale: sc }] }]}>
+        {danger ? (
+          <Ionicons name="call" size={26} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
+        ) : (
+          <Ionicons name={icon} size={22} color={active ? '#fff' : C.whiteD} />
+        )}
+      </Animated.View>
+      <Text style={[s.ctrlLbl, danger && { color: C.red }]}>{label}</Text>
+    </TouchableOpacity>
+  )
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
 export default function CallScreen() {
   const params = useLocalSearchParams()
   const router = useRouter()
@@ -82,6 +220,7 @@ export default function CallScreen() {
   const [localStreamState, setLocalStreamState] = useState(null)
   const [muted, setM] = useState(false)
   const [speakerOn, setSpeakerOn] = useState(isVideo)
+  const speakerOnRef = useRef(isVideo)
   const [videoOff, setVideoOff] = useState(false)
   const [connected, setConnected] = useState(false)
   const [seconds, setSeconds] = useState(0)
@@ -89,149 +228,134 @@ export default function CallScreen() {
   const [ctrlShown, setCtrlShown] = useState(true)
   const [swapped, setSwapped] = useState(false)
 
-  const ctrlOpacity   = useRef(new Animated.Value(1)).current
-  const pipScale      = useRef(new Animated.Value(0)).current
-  const pipSizeScale  = useRef(new Animated.Value(1)).current
-  const pipSizeRef    = useRef(1)
+  // Animations
+  const ctrlOpacity = useRef(new Animated.Value(1)).current
+  const pipScale = useRef(new Animated.Value(0)).current
+  const pipSizeScale = useRef(new Animated.Value(1)).current
+  const pipSizeRef = useRef(1)
   const remoteOpacity = useRef(new Animated.Value(0)).current
-  const pulseAnim     = useRef(new Animated.Value(1)).current
+  const avatarOp = useRef(new Animated.Value(0)).current
+  const avatarSc = useRef(new Animated.Value(0.7)).current
+  const topBarOp = useRef(new Animated.Value(0)).current
+  const topBarY = useRef(new Animated.Value(-20)).current
+  const ctrlBarOp = useRef(new Animated.Value(0)).current
+  const ctrlBarY = useRef(new Animated.Value(40)).current
+  const timerGlowAnim = useRef(new Animated.Value(0)).current
 
   const pipInitX = W - PIP_W - PIP_MARGIN
-  const pipInitY = Platform.OS === 'android' ? 88 : 108
-  const pipPan   = useRef(new Animated.ValueXY({ x: pipInitX, y: pipInitY })).current
+  const pipInitY = Platform.OS === 'android' ? 90 : 110
+  const pipPan = useRef(new Animated.ValueXY({ x: pipInitX, y: pipInitY })).current
   const pipPanOffset = useRef({ x: pipInitX, y: pipInitY })
 
-  const timerRef         = useRef(null)
-  const mountedRef       = useRef(true)
-  const setupDone        = useRef(false)
-  const ctrlTimer        = useRef(null)
-  const connectedRef     = useRef(false)
-  const dragStartRef     = useRef(null)
-  const pcReadyRef       = useRef(false)
+  const timerRef = useRef(null)
+  const mountedRef = useRef(true)
+  const setupDone = useRef(false)
+  const ctrlTimer = useRef(null)
+  const connectedRef = useRef(false)
+  const dragStartRef = useRef(null)
+  const pcReadyRef = useRef(false)
   const remoteDescSetRef = useRef(false)
-  const pendingOfferRef  = useRef(null)
+  const pendingOfferRef = useRef(null)
   const pendingAnswerRef = useRef(null)
-  const pendingIceRef    = useRef([])
-  const offerSentRef     = useRef(false)
+  const pendingIceRef = useRef([])
+  const offerSentRef = useRef(false)
+  const lastDistRef = useRef(null)
 
-  // ── PanResponder for draggable PiP ────────────────────────────────────────
+  // Entry animation
+  useEffect(() => {
+    Animated.stagger(120, [
+      Animated.parallel([
+        Animated.timing(topBarOp, { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.timing(topBarY, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.spring(avatarSc, { toValue: 1, tension: 65, friction: 7, useNativeDriver: true }),
+        Animated.timing(avatarOp, { toValue: 1, duration: 450, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.timing(ctrlBarOp, { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.timing(ctrlBarY, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]),
+    ]).start()
+  }, [])
+
+  // Timer glow pulse when connected
+  useEffect(() => {
+    if (!connected) return
+    Animated.loop(Animated.sequence([
+      Animated.timing(timerGlowAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      Animated.timing(timerGlowAnim, { toValue: 0, duration: 1500, useNativeDriver: true }),
+    ])).start()
+  }, [connected])
+
+  // PanResponder for PiP drag
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: (_, g) => g.numberActiveTouches === 1,
       onMoveShouldSetPanResponder: (_, g) =>
         g.numberActiveTouches === 1 && (Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4),
-
       onPanResponderGrant: (_, g) => {
         dragStartRef.current = { x: g.x0, y: g.y0 }
         pipPan.setOffset(pipPanOffset.current)
         pipPan.setValue({ x: 0, y: 0 })
       },
-
       onPanResponderMove: Animated.event(
         [null, { dx: pipPan.x, dy: pipPan.y }],
         { useNativeDriver: false }
       ),
-
       onPanResponderRelease: (_, g) => {
         pipPan.flattenOffset()
-
-        const dx = Math.abs(g.dx)
-        const dy = Math.abs(g.dy)
-        const isTap = dx < 6 && dy < 6
-
-        if (isTap) {
-          setSwapped((prev) => !prev)
-          return
+        if (Math.abs(g.dx) < 6 && Math.abs(g.dy) < 6) {
+          setSwapped(p => !p); return
         }
-
-        const currentX = pipPanOffset.current.x + g.dx
-        const currentY = pipPanOffset.current.y + g.dy
-
-        const snapX = currentX < W / 2 ? PIP_MARGIN : PIP_MAX_X
-        const snapY = Math.max(
-          Platform.OS === 'android' ? 80 : 100,
-          Math.min(currentY, PIP_MAX_Y)
-        )
-
-        Animated.spring(pipPan, {
-          toValue: { x: snapX, y: snapY },
-          useNativeDriver: false,
-          tension: 120,
-          friction: 10,
-        }).start()
-
+        const cx = pipPanOffset.current.x + g.dx
+        const cy = pipPanOffset.current.y + g.dy
+        const snapX = cx < W / 2 ? PIP_MARGIN : PIP_MAX_X
+        const snapY = Math.max(Platform.OS === 'android' ? 80 : 100, Math.min(cy, PIP_MAX_Y))
+        Animated.spring(pipPan, { toValue: { x: snapX, y: snapY }, useNativeDriver: false, tension: 120, friction: 10 }).start()
         pipPanOffset.current = { x: snapX, y: snapY }
       },
     })
   ).current
 
-  // ── PinchResponder for resizable PiP ──────────────────────────────────────
-  const lastDistRef = useRef(null)
   const pinchResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: (_, g) => g.numberActiveTouches === 2,
       onMoveShouldSetPanResponder: (_, g) => g.numberActiveTouches === 2,
-
-      onPanResponderGrant: () => {
-        lastDistRef.current = null
-      },
-
+      onPanResponderGrant: () => { lastDistRef.current = null },
       onPanResponderMove: (e) => {
-        const touches = e.nativeEvent.touches
-        if (touches.length < 2) return
-
-        const dx = touches[0].pageX - touches[1].pageX
-        const dy = touches[0].pageY - touches[1].pageY
-        const dist = Math.sqrt(dx * dx + dy * dy)
-
+        const t = e.nativeEvent.touches
+        if (t.length < 2) return
+        const d = Math.sqrt((t[0].pageX - t[1].pageX) ** 2 + (t[0].pageY - t[1].pageY) ** 2)
         if (lastDistRef.current !== null) {
-          const delta = dist / lastDistRef.current
-          const next = Math.min(Math.max(pipSizeRef.current * delta, 0.5), 2.5)
+          const next = Math.min(Math.max(pipSizeRef.current * (d / lastDistRef.current), 0.5), 2.5)
           pipSizeRef.current = next
           pipSizeScale.setValue(next)
         }
-        lastDistRef.current = dist
+        lastDistRef.current = d
       },
-
       onPanResponderRelease: () => {
         lastDistRef.current = null
         const cur = pipSizeRef.current
         const snapped = cur < 0.85 ? 0.7 : cur > 1.3 ? 1.6 : 1.0
         pipSizeRef.current = snapped
-        Animated.spring(pipSizeScale, {
-          toValue: snapped,
-          useNativeDriver: false,
-          tension: 150,
-          friction: 8,
-        }).start()
+        Animated.spring(pipSizeScale, { toValue: snapped, useNativeDriver: false, tension: 150, friction: 8 }).start()
       },
     })
   ).current
 
-  // ── Pulse animation (waiting state) ───────────────────────────────────────
-  useEffect(() => {
-    if (connected) return
-    const loop = Animated.loop(Animated.sequence([
-      Animated.timing(pulseAnim, { toValue: 1.07, duration: 950, useNativeDriver: true }),
-      Animated.timing(pulseAnim, { toValue: 1.0,  duration: 950, useNativeDriver: true }),
-    ]))
-    loop.start()
-    return () => loop.stop()
-  }, [connected])
-
-  // ── Controls auto-hide ────────────────────────────────────────────────────
   const scheduleHide = useCallback(() => {
     if (!isVideo) return
     if (ctrlTimer.current) clearTimeout(ctrlTimer.current)
     ctrlTimer.current = setTimeout(() => {
-      Animated.timing(ctrlOpacity, { toValue: 0, duration: 350, useNativeDriver: true }).start()
+      Animated.timing(ctrlOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start()
       setCtrlShown(false)
     }, 4500)
   }, [isVideo])
 
   const bringCtrl = useCallback(() => {
     setCtrlShown(true)
-    Animated.timing(ctrlOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start()
+    Animated.timing(ctrlOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start()
     scheduleHide()
   }, [scheduleHide])
 
@@ -242,62 +366,43 @@ export default function CallScreen() {
 
   useEffect(() => {
     if (connected && isVideo) {
-      Animated.spring(pipScale, {
-        toValue: 1,
-        useNativeDriver: false,
-        tension: 120,
-        friction: 8,
-      }).start()
+      Animated.spring(pipScale, { toValue: 1, useNativeDriver: false, tension: 120, friction: 8 }).start()
     }
   }, [connected, isVideo])
 
-  // ── handleEnd ─────────────────────────────────────────────────────────────
   const handleEnd = useCallback((remote = false) => {
     if (!remote) getSocket()?.emit('call:end', { callId })
     dispatch({ type: 'RESET' })
-    try { router.back() } catch (_) {}
+    try { router.back() } catch (_) { }
   }, [callId, dispatch, router])
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  MAIN SETUP
-  // ══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     mountedRef.current = true
     connectedRef.current = false
-
-    if (!callId || !roomId) return
-    if (setupDone.current) return
+    if (!callId || !roomId || setupDone.current) return
     setupDone.current = true
 
     const socket = getSocket()
-    if (isOutgoing) startRingback().catch(() => {})
+    if (isOutgoing) startRingback().catch(() => { })
 
     const processOffer = async (offer) => {
       try {
         await setRemoteDescription(offer)
         remoteDescSetRef.current = true
-        for (const c of pendingIceRef.current) {
-          try { await addIceCandidate(c) } catch (_) {}
-        }
+        for (const c of pendingIceRef.current) { try { await addIceCandidate(c) } catch (_) { } }
         pendingIceRef.current = []
         const answer = await createAnswer()
         socket?.emit('webrtc:answer', { callId, answer })
-      } catch (err) {
-        console.error('[Call] processOffer error:', err.message)
-      }
+      } catch (err) { console.error('[Call] processOffer:', err.message) }
     }
 
     const processAnswer = async (answer) => {
       try {
         await setRemoteDescription(answer)
         remoteDescSetRef.current = true
-        for (const c of pendingIceRef.current) {
-          try { await addIceCandidate(c) } catch (_) {}
-        }
+        for (const c of pendingIceRef.current) { try { await addIceCandidate(c) } catch (_) { } }
         pendingIceRef.current = []
-      } catch (err) {
-        console.error('[Call] processAnswer error:', err.message)
-      }
+      } catch (err) { console.error('[Call] processAnswer:', err.message) }
     }
 
     const sendOffer = async () => {
@@ -306,97 +411,61 @@ export default function CallScreen() {
       try {
         const offer = await createOffer()
         socket?.emit('webrtc:offer', { callId, offer })
-      } catch (err) {
-        console.error('[Call] sendOffer error:', err.message)
-        offerSentRef.current = false
-      }
+      } catch (err) { console.error('[Call] sendOffer:', err.message); offerSentRef.current = false }
     }
 
-    const onOffer = ({ callId: cid, offer }) => {
-      if (cid !== callId) return
-      if (!pcReadyRef.current) { pendingOfferRef.current = offer; return }
-      processOffer(offer)
-    }
-    const onAnswer = ({ callId: cid, answer }) => {
-      if (cid !== callId) return
-      if (!pcReadyRef.current) { pendingAnswerRef.current = answer; return }
-      processAnswer(answer)
-    }
+    const onOffer = ({ callId: cid, offer }) => { if (cid !== callId) return; if (!pcReadyRef.current) { pendingOfferRef.current = offer; return } processOffer(offer) }
+    const onAnswer = ({ callId: cid, answer }) => { if (cid !== callId) return; if (!pcReadyRef.current) { pendingAnswerRef.current = answer; return } processAnswer(answer) }
     const onIce = ({ callId: cid, candidate }) => {
       if (cid !== callId || !candidate) return
-      if (!pcReadyRef.current || !remoteDescSetRef.current) {
-        pendingIceRef.current.push(candidate)
-        return
-      }
-      addIceCandidate(candidate).catch(() => {})
+      if (!pcReadyRef.current || !remoteDescSetRef.current) { pendingIceRef.current.push(candidate); return }
+      addIceCandidate(candidate).catch(() => { })
     }
-    const onStartOffer = ({ callId: cid }) => {
-      if (cid !== callId || !isOutgoing || !pcReadyRef.current) return
-      sendOffer()
-    }
+    const onStartOffer = ({ callId: cid }) => { if (cid !== callId || !isOutgoing || !pcReadyRef.current) return; sendOffer() }
     const onEnd = () => { if (mountedRef.current) handleEnd(true) }
 
-    socket?.on('webrtc:offer',         onOffer)
-    socket?.on('webrtc:answer',        onAnswer)
+    socket?.on('webrtc:offer', onOffer)
+    socket?.on('webrtc:answer', onAnswer)
     socket?.on('webrtc:ice-candidate', onIce)
-    socket?.on('webrtc:start_offer',   onStartOffer)
-    socket?.on('call:ended',           onEnd)
-    socket?.on('call:rejected',        onEnd)
-    socket?.on('call:canceled',        onEnd)
+    socket?.on('webrtc:start_offer', onStartOffer)
+    socket?.on('call:ended', onEnd)
+    socket?.on('call:rejected', onEnd)
+    socket?.on('call:canceled', onEnd)
 
     const setup = async () => {
       try {
         const ok = await requestCallPermissions(isVideo ? 'video' : 'voice')
         if (!ok || !mountedRef.current) { handleEnd(true); return }
-
         startAudioSession(isVideo ? 'video' : 'audio')
-
         const stream = await initLocalStream(isVideo)
         if (!mountedRef.current) return
         setLocalStreamState(stream)
-
         setSpeaker(isVideo)
-
         createPeerConnection({
           onRemoteStream: (rs) => {
             if (!mountedRef.current || connectedRef.current) return
             connectedRef.current = true
-            stopRingback().catch(() => {})
+            stopRingback().catch(() => { })
             setRemoteStreamState(rs)
             setConnected(true)
             setNetWeak(false)
-            Animated.timing(remoteOpacity, { toValue: 1, duration: 300, useNativeDriver: true }).start()
+            Animated.timing(remoteOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start()
             if (isVideo) scheduleHide()
-            if (!timerRef.current) {
-              timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
-            }
+            if (!timerRef.current) timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
+            // ✅ FIX: connect হওয়ার পরে WebRTC audio reset করে, তাই আবার set করতে হয়
+            setTimeout(() => { setSpeaker(speakerOnRef.current) }, 500)
           },
-          onIceCandidate: (candidate) => {
-            socket?.emit('webrtc:ice-candidate', { callId, candidate })
-          },
+          onIceCandidate: (candidate) => { socket?.emit('webrtc:ice-candidate', { callId, candidate }) },
           onConnectionStateChange: (state) => {
             if (state === 'failed' || state === 'disconnected') setNetWeak(true)
             if (state === 'connected') setNetWeak(false)
           },
-          onError: (err) => {
-            console.error('[Call] PC Error:', err)
-            if (mountedRef.current) handleEnd(true)
-          },
+          onError: (err) => { console.error('[Call] PC Error:', err); if (mountedRef.current) handleEnd(true) },
         })
-
         pcReadyRef.current = true
-
-        if (pendingOfferRef.current) {
-          const o = pendingOfferRef.current; pendingOfferRef.current = null
-          await processOffer(o)
-        }
-        if (pendingAnswerRef.current) {
-          const a = pendingAnswerRef.current; pendingAnswerRef.current = null
-          await processAnswer(a)
-        }
-
-        socket?.emit('webrtc:ready', { callId }, () => {})
-
+        if (pendingOfferRef.current) { const o = pendingOfferRef.current; pendingOfferRef.current = null; await processOffer(o) }
+        if (pendingAnswerRef.current) { const a = pendingAnswerRef.current; pendingAnswerRef.current = null; await processAnswer(a) }
+        socket?.emit('webrtc:ready', { callId }, () => { })
         if (isOutgoing) {
           setTimeout(() => {
             if (mountedRef.current && pcReadyRef.current && !offerSentRef.current) sendOffer()
@@ -412,16 +481,16 @@ export default function CallScreen() {
 
     return () => {
       mountedRef.current = false
-      stopRingback().catch(() => {})
+      stopRingback().catch(() => { })
       const s = getSocket()
-      s?.off('webrtc:offer',         onOffer)
-      s?.off('webrtc:answer',        onAnswer)
+      s?.off('webrtc:offer', onOffer)
+      s?.off('webrtc:answer', onAnswer)
       s?.off('webrtc:ice-candidate', onIce)
-      s?.off('webrtc:start_offer',   onStartOffer)
-      s?.off('call:ended',           onEnd)
-      s?.off('call:rejected',        onEnd)
-      s?.off('call:canceled',        onEnd)
-      if (timerRef.current)  clearInterval(timerRef.current)
+      s?.off('webrtc:start_offer', onStartOffer)
+      s?.off('call:ended', onEnd)
+      s?.off('call:rejected', onEnd)
+      s?.off('call:canceled', onEnd)
+      if (timerRef.current) clearInterval(timerRef.current)
       if (ctrlTimer.current) clearTimeout(ctrlTimer.current)
       cleanup()
     }
@@ -431,72 +500,44 @@ export default function CallScreen() {
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
   const statusText =
-    netWeak && connected ? '⚡ Weak network…'
-    : connected ? fmt(seconds)
-    : isOutgoing ? 'Ringing…'
-    : 'Connecting…'
+    netWeak && connected ? 'Weak signal…'
+      : connected ? fmt(seconds)
+        : isOutgoing ? 'Ringing…'
+          : 'Connecting…'
 
-  // ── Video stream renderer (fullscreen) ────────────────────────────────────
+  const accentColor = isVideo ? C.accent : C.green
+
+  // ── Video renderers ───────────────────────────────────────────────────────
   const renderFullscreen = (stream, mirror = false, opacity = null) => {
     const inner = isWeb
       ? <WebVideoView stream={stream} mirror={mirror} />
       : <RTCView streamURL={stream?.toURL?.()} style={{ flex: 1 }} objectFit="cover" mirror={mirror} />
-
-    if (opacity) {
-      return (
-        <Animated.View style={[StyleSheet.absoluteFill, { opacity }]}>
-          {inner}
-        </Animated.View>
-      )
-    }
+    if (opacity) return <Animated.View style={[StyleSheet.absoluteFill, { opacity }]}>{inner}</Animated.View>
     return <View style={StyleSheet.absoluteFill}>{inner}</View>
   }
 
-  // ── Video stream renderer (PiP) ───────────────────────────────────────────
-  //
-  // FIX: scale transform এবং overflow:hidden একই Animated.View এ রাখা যাবে না।
-  // Android এ scale transform overflow:hidden কে bypass করে।
-  // Solution:
-  //   1. Outer Animated.View → শুধু translate transform (position)
-  //   2. Inner Animated.View → শুধু scale transform
-  //   3. Plain View (pipClip) → overflow:'hidden' + borderRadius (actual clipping)
-  //   4. RTCView → flex:1 (absoluteFill নয়)
-  //
   const renderPip = (stream, mirror = false, label = null) => {
     if (!stream) return null
     return (
       <Animated.View
-        style={[s.pipBox, {
-          transform: [{ translateX: pipPan.x }, { translateY: pipPan.y }],
-        }]}
+        style={[s.pipBox, { transform: [{ translateX: pipPan.x }, { translateY: pipPan.y }] }]}
         {...pinchResponder.panHandlers}
         {...panResponder.panHandlers}
       >
-        {/* ✅ FIX: scale আলাদা Animated.View এ — overflow:hidden এর সাথে মিশবে না */}
-        <Animated.View style={{
-          flex: 1,
-          transform: [{ scale: pipScale }, { scale: pipSizeScale }],
-        }}>
-          {/* ✅ FIX: plain View এ overflow:hidden + borderRadius → Android এ সঠিকভাবে clip করে */}
+        <Animated.View style={{ flex: 1, transform: [{ scale: pipScale }, { scale: pipSizeScale }] }}>
           <View style={s.pipClip}>
             {isWeb
               ? <WebVideoView stream={stream} mirror={mirror} />
-              : (
-                <RTCView
-                  streamURL={stream?.toURL?.()}
-                  style={s.pipRTCView}
-                  objectFit="cover"
-                  mirror={mirror}
-                />
-              )
+              : <RTCView streamURL={stream?.toURL?.()} style={s.pipRTCView} objectFit="cover" mirror={mirror} />
             }
             {label && (
               <View style={s.pipLabel}>
                 <Text style={s.pipLabelTxt}>{label}</Text>
               </View>
             )}
+            {/* Drag handle dots */}
             <View style={s.pipHandle}>
-              <View style={s.dot}/><View style={s.dot}/><View style={s.dot}/>
+              {[0, 1, 2].map(i => <View key={i} style={s.dot} />)}
             </View>
           </View>
         </Animated.View>
@@ -504,7 +545,6 @@ export default function CallScreen() {
     )
   }
 
-  // ── Waiting camera background (before connected) ──────────────────────────
   const renderWaitingCamera = () => {
     if (!isVideo || connected || !localStreamState || videoOff) return null
     return (
@@ -518,28 +558,19 @@ export default function CallScreen() {
     )
   }
 
-  // ── Decide what to render when connected ──────────────────────────────────
   const renderVideoLayers = () => {
     if (!isVideo || !connected) return null
-
     if (!swapped) {
       return (
         <>
           {remoteStreamState && renderFullscreen(remoteStreamState, false, remoteOpacity)}
           {!videoOff && localStreamState && renderPip(localStreamState, true, 'You')}
           {videoOff && (
-            <Animated.View
-              style={[s.pipBox, {
-                transform: [{ translateX: pipPan.x }, { translateY: pipPan.y }],
-              }]}
-              {...pinchResponder.panHandlers}
-              {...panResponder.panHandlers}
-            >
+            <Animated.View style={[s.pipBox, { transform: [{ translateX: pipPan.x }, { translateY: pipPan.y }] }]}
+              {...pinchResponder.panHandlers} {...panResponder.panHandlers}>
               <Animated.View style={{ flex: 1, transform: [{ scale: pipScale }, { scale: pipSizeScale }] }}>
                 <View style={s.pipClip}>
-                  <View style={s.pipOff}>
-                    <Ionicons name="videocam-off" size={20} color={C.whiteD} />
-                  </View>
+                  <View style={s.pipOff}><Ionicons name="videocam-off" size={22} color={C.whiteD} /></View>
                 </View>
               </Animated.View>
             </Animated.View>
@@ -551,9 +582,9 @@ export default function CallScreen() {
         <>
           {localStreamState && !videoOff && renderFullscreen(localStreamState, true)}
           {videoOff && (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' }]}>
-              <Ionicons name="videocam-off" size={48} color={C.whiteD} />
-              <Text style={{ color: C.whiteD, marginTop: 10, fontSize: 14 }}>Camera off</Text>
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#0D1220', alignItems: 'center', justifyContent: 'center' }]}>
+              <Ionicons name="videocam-off" size={44} color={C.whiteDD} />
+              <Text style={{ color: C.whiteDD, marginTop: 10, fontSize: 14 }}>Camera off</Text>
             </View>
           )}
           {remoteStreamState && renderPip(remoteStreamState, false, peerName)}
@@ -568,87 +599,147 @@ export default function CallScreen() {
       style={s.root}
       onPress={isVideo && connected ? bringCtrl : undefined}
     >
-      <StatusBar barStyle="light-content" backgroundColor="#000" translucent />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+
+      {/* ── Background ── */}
+      {(!isVideo || !connected) && <SpaceBackground accent={isVideo ? 'blue' : 'green'} />}
 
       {renderWaitingCamera()}
       {renderVideoLayers()}
 
       {/* ── Top bar ── */}
       <SafeAreaView style={s.topSafe}>
-        <View style={s.topBar}>
-          <View style={s.typePill}>
-            <Ionicons name={isVideo ? 'videocam' : 'call'} size={12} color={C.white} />
-            <Text style={s.typeTxt}>{isVideo ? 'Video Call' : 'Voice Call'}</Text>
+        <Animated.View style={[s.topBar, {
+          opacity: topBarOp,
+          transform: [{ translateY: topBarY }],
+        }]}>
+          {/* Type pill */}
+          <View style={[s.typePill, { borderColor: accentColor + '40', backgroundColor: accentColor + '15' }]}>
+            <View style={[s.typeDot, { backgroundColor: accentColor }]} />
+            <Text style={[s.typeTxt, { color: accentColor }]}>
+              {isVideo ? 'Video Call' : 'Voice Call'}
+            </Text>
           </View>
-          <Text style={[s.durationTxt, netWeak && { color: '#FFB800' }]}>{statusText}</Text>
+
+          {/* Timer / status */}
+          <Animated.View style={[s.timerWrap, {
+            shadowColor: connected ? C.green : 'transparent',
+            shadowOpacity: timerGlowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.7] }),
+            shadowRadius: 10,
+            shadowOffset: { width: 0, height: 0 },
+          }]}>
+            <Text style={[
+              s.durationTxt,
+              netWeak && { color: C.amber },
+              connected && !netWeak && { color: C.green },
+            ]}>
+              {statusText}
+            </Text>
+          </Animated.View>
+
+          {/* Swap hint */}
           {isVideo && connected && (
-            <TouchableOpacity
-              onPress={() => setSwapped((p) => !p)}
-              style={s.swapHint}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="swap-horizontal" size={14} color={C.whiteD} />
-              <Text style={s.swapHintTxt}>Tap preview to swap</Text>
+            <TouchableOpacity onPress={() => setSwapped(p => !p)} style={s.swapPill}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="swap-horizontal" size={12} color={C.whiteDD} />
+              <Text style={s.swapTxt}>Tap preview to swap</Text>
             </TouchableOpacity>
           )}
-        </View>
+        </Animated.View>
       </SafeAreaView>
 
-      {/* ── Avatar / name (voice call or waiting) ── */}
+      {/* ── Avatar / name (voice or waiting) ── */}
       {(!isVideo || !connected) && (
         <View style={s.center} pointerEvents="none">
-          <Animated.View style={{ transform: [{ scale: pulseAnim }], alignItems: 'center' }}>
-            <View style={s.avatarRing}>
+          <Animated.View style={{ alignItems: 'center', opacity: avatarOp, transform: [{ scale: avatarSc }] }}>
+
+            {/* Ripple rings */}
+            <PulseRings color={accentColor} active={!connected} />
+
+            {/* Avatar */}
+            <View style={[s.avatarGlassRing, { borderColor: accentColor + '55', shadowColor: accentColor }]}>
               {peerAvatar
-                ? <Image source={{ uri: peerAvatar }} style={s.avatar} />
+                ? <Image source={{ uri: peerAvatar }} style={s.avatarImg} />
                 : (
-                  <View style={[s.avatar, s.avatarFb]}>
-                    <Text style={s.avatarLetter}>{(peerName?.[0] || '?').toUpperCase()}</Text>
+                  <View style={[s.avatarFallback, { backgroundColor: accentColor + '20' }]}>
+                    <Text style={[s.avatarLetter, { color: accentColor }]}>
+                      {(peerName?.[0] || '?').toUpperCase()}
+                    </Text>
                   </View>
                 )
               }
             </View>
+
+            {/* Name */}
             <Text style={s.peerName}>{peerName}</Text>
-            <Text style={s.subTxt}>{statusText}</Text>
+
+            {/* Status pill */}
+            <View style={[s.statusPill, { borderColor: accentColor + '35' }]}>
+              {!connected && <View style={[s.statusDotAnim, { backgroundColor: accentColor }]} />}
+              <Text style={[s.statusTxt, netWeak && { color: C.amber }]}>{statusText}</Text>
+            </View>
           </Animated.View>
         </View>
       )}
 
-      {/* ── Controls ── */}
+      {/* ── Controls bar ── */}
       <Animated.View
-        style={[s.ctrlOuter, isVideo && connected && { opacity: ctrlOpacity }]}
+        style={[
+          s.ctrlOuter,
+          isVideo && connected && { opacity: ctrlOpacity },
+          { opacity: Animated.multiply(isVideo && connected ? ctrlOpacity : new Animated.Value(1), ctrlBarOp) },
+          { transform: [{ translateY: ctrlBarY }] },
+        ]}
         pointerEvents={ctrlShown || !isVideo ? 'auto' : 'none'}
       >
         <SafeAreaView>
-          <View style={s.controls}>
-            <CtrlBtn
-              icon={muted ? 'mic-off' : 'mic'}
-              label={muted ? 'Unmute' : 'Mute'}
-              active={muted}
-              onPress={() => { const v = !muted; setM(v); setMuted(v) }}
-            />
-            {isVideo && (
+          {/* Frosted glass bar */}
+          <View style={s.ctrlBar}>
+            {/* Thin top separator line */}
+            <View style={s.ctrlBarLine} />
+
+            <View style={s.controls}>
               <CtrlBtn
-                icon={videoOff ? 'videocam-off' : 'videocam'}
-                label={videoOff ? 'Start' : 'Stop'}
-                active={videoOff}
-                onPress={() => { const v = !videoOff; setVideoOff(v); setVideoMuted(v) }}
+                icon={muted ? 'mic-off' : 'mic'}
+                label={muted ? 'Unmute' : 'Mute'}
+                active={muted}
+                onPress={() => { const v = !muted; setM(v); setMuted(v) }}
               />
-            )}
-            <EndBtn onPress={() => handleEnd(false)} />
-            {isVideo && <CtrlBtn icon="camera-reverse" label="Flip" onPress={() => switchCamera()} />}
-            {!isVideo && (
+
+              {isVideo && (
+                <CtrlBtn
+                  icon={videoOff ? 'videocam-off' : 'videocam'}
+                  label={videoOff ? 'Start Cam' : 'Stop Cam'}
+                  active={videoOff}
+                  onPress={() => { const v = !videoOff; setVideoOff(v); setVideoMuted(v) }}
+                />
+              )}
+
+              {/* End call — center, bigger */}
               <CtrlBtn
-                icon={speakerOn ? 'volume-high' : 'volume-low'}
-                label={speakerOn ? 'Speaker' : 'Ear'}
-                active={speakerOn}
-                onPress={() => {
-                  const next = !speakerOn
-                  setSpeakerOn(next)
-                  setSpeaker(next)
-                }}
+                icon="call"
+                label="End Call"
+                danger
+                onPress={() => handleEnd(false)}
               />
-            )}
+
+              {isVideo && (
+                <CtrlBtn
+                  icon="camera-reverse"
+                  label="Flip"
+                  onPress={() => switchCamera()}
+                />
+              )}
+
+              {!isVideo && (
+                <CtrlBtn
+                  icon={speakerOn ? 'volume-high' : 'volume-low'}
+                  label={speakerOn ? 'Speaker' : 'Earpiece'}
+                  active={speakerOn}
+                  onPress={() => { const n = !speakerOn; setSpeakerOn(n); speakerOnRef.current = n; setSpeaker(n) }}
+                />
+              )}
+            </View>
           </View>
         </SafeAreaView>
       </Animated.View>
@@ -656,148 +747,192 @@ export default function CallScreen() {
   )
 }
 
-// ── Buttons ───────────────────────────────────────────────────────────────────
-function EndBtn({ onPress }) {
-  const sc = useRef(new Animated.Value(1)).current
-  return (
-    <TouchableOpacity onPress={onPress}
-      onPressIn={() => Animated.spring(sc, { toValue: 0.88, useNativeDriver: true, speed: 60 }).start()}
-      onPressOut={() => Animated.spring(sc, { toValue: 1, useNativeDriver: true, speed: 60 }).start()}
-      activeOpacity={1}>
-      <Animated.View style={[s.endBtn, { transform: [{ scale: sc }] }]}>
-        <Ionicons name="call" size={28} color={C.white} style={{ transform: [{ rotate: '135deg' }] }} />
-      </Animated.View>
-    </TouchableOpacity>
-  )
-}
-
-function CtrlBtn({ icon, label, onPress, active = false }) {
-  const sc = useRef(new Animated.Value(1)).current
-  return (
-    <TouchableOpacity onPress={onPress}
-      onPressIn={() => Animated.spring(sc, { toValue: 0.86, useNativeDriver: true, speed: 60 }).start()}
-      onPressOut={() => Animated.spring(sc, { toValue: 1, useNativeDriver: true, speed: 60 }).start()}
-      activeOpacity={1} style={s.ctrlWrap}>
-      <Animated.View style={[s.ctrl, active && s.ctrlActive, { transform: [{ scale: sc }] }]}>
-        <Ionicons name={icon} size={22} color={C.white} />
-      </Animated.View>
-      <Text style={s.ctrlLbl}>{label}</Text>
-    </TouchableOpacity>
-  )
-}
-
 // ── Styles ────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
-  waitingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
+  root: { flex: 1, backgroundColor: C.bg },
 
+  waitingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5,8,16,0.52)',
+  },
+
+  // ── Top bar ──
   topSafe: {
     position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30,
-    paddingTop: Platform.OS === 'android' ? 32 : 0,
+    paddingTop: Platform.OS === 'android' ? 36 : 0,
   },
-  topBar: { alignItems: 'center', paddingTop: 14, gap: 6 },
+  topBar: {
+    alignItems: 'center',
+    paddingTop: 14,
+    gap: 8,
+  },
   typePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    borderWidth: 1,
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderRadius: 24,
+  },
+  typeDot: {
+    width: 6, height: 6, borderRadius: 3,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  typeTxt: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6 },
+
+  timerWrap: { elevation: 0 },
+  durationTxt: {
+    color: C.whiteDD,
+    fontSize: 16,
+    fontWeight: '300',
+    letterSpacing: 3,
+    fontVariant: ['tabular-nums'],
+  },
+
+  swapPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 12, marginTop: 2,
   },
-  typeTxt: { color: C.white, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
-  durationTxt: { color: C.whiteD, fontSize: 14, fontWeight: '400', letterSpacing: 0.8 },
-  swapHint: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
-    marginTop: 2,
-  },
-  swapHintTxt: { color: C.whiteD, fontSize: 11 },
+  swapTxt: { color: C.whiteDD, fontSize: 10, letterSpacing: 0.3 },
 
+  // ── Center avatar ──
   center: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingTop: 60, paddingBottom: 160, zIndex: 10,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 70,
+    paddingBottom: 160,
+    zIndex: 10,
   },
-  avatarRing: {
-    borderRadius: 78, padding: 3, borderWidth: 2.5,
-    borderColor: 'rgba(255,255,255,0.22)',
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5, shadowRadius: 28, elevation: 14, marginBottom: 22,
+
+  avatarGlassRing: {
+    width: 152, height: 152, borderRadius: 76,
+    borderWidth: 2,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 30,
+    elevation: 18,
+    marginBottom: 28,
   },
-  avatar: { width: 144, height: 144, borderRadius: 72 },
-  avatarFb: { backgroundColor: C.accent + '44', alignItems: 'center', justifyContent: 'center' },
-  avatarLetter: { color: C.white, fontSize: 56, fontWeight: '700' },
+  avatarImg: {
+    width: '100%', height: '100%', borderRadius: 74,
+  },
+  avatarFallback: {
+    width: '100%', height: '100%', borderRadius: 74,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarLetter: {
+    fontSize: 58, fontWeight: '700',
+  },
+
   peerName: {
-    color: C.white, fontSize: 27, fontWeight: '700', letterSpacing: 0.2,
-    marginBottom: 8, textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 8,
+    color: C.white,
+    fontSize: 30,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    marginBottom: 14,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 10,
+    maxWidth: W - 60,
+    textAlign: 'center',
   },
-  subTxt: { color: C.whiteDD, fontSize: 14, letterSpacing: 1.2 },
 
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1,
+    paddingHorizontal: 16, paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  statusDotAnim: {
+    width: 6, height: 6, borderRadius: 3,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9, shadowRadius: 5,
+  },
+  statusTxt: {
+    color: C.whiteDD,
+    fontSize: 13,
+    letterSpacing: 1.0,
+    fontWeight: '400',
+  },
+
+  // ── Controls bar ──
+  ctrlOuter: {
+    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20,
+  },
+  ctrlBar: {
+    backgroundColor: 'rgba(10,14,24,0.88)',
+    borderTopWidth: 0,
+  },
+  ctrlBarLine: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    marginHorizontal: 0,
+  },
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+    paddingVertical: 20,
+    paddingHorizontal: 10,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 30,
+  },
+
+  ctrlWrap: { alignItems: 'center', gap: 8, minWidth: 64 },
+  ctrl: {
+    width: 58, height: 58, borderRadius: 29,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  ctrlLbl: {
+    color: C.whiteDD,
+    fontSize: 10,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+  },
+
+  // ── PiP ──
   pipBox: {
-    position: 'absolute',
-    width: PIP_W,
-    height: PIP_H,
-    zIndex: 25,
-    // ✅ FIX: shadow/elevation সরানো — এগুলো border এর মতো দেখাচ্ছিল
-    // এবং Android এ overflow:hidden কে ভাঙছিল
+    position: 'absolute', width: PIP_W, height: PIP_H, zIndex: 25,
   },
-
-  // ✅ FIX: plain View এ overflow:'hidden' + borderRadius
-  // Animated.View এ scale transform থাকলে overflow:hidden কাজ করে না Android এ
-  // তাই scale আলাদা Animated.View এ রেখে, clipping এই plain View এ করা হয়েছে
   pipClip: {
-    flex: 1,
-    borderRadius: 5,
-    overflow: 'hidden',
-    backgroundColor: '#1a1a1a',
+    flex: 1, borderRadius: 14, overflow: 'hidden',
+    backgroundColor: '#111820',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5, shadowRadius: 10, elevation: 10,
   },
-
-  // ✅ FIX: flex:1 (absoluteFill নয়) + borderRadius as secondary clip guard
-  pipRTCView: {
-    flex: 1,
-    borderRadius:5,
-  },
-
+  pipRTCView: { flex: 1, borderRadius: 14 },
   pipOff: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.65)',
     alignItems: 'center', justifyContent: 'center',
   },
   pipLabel: {
-    position: 'absolute', bottom: 4, left: 0, right: 0,
-    alignItems: 'center',
+    position: 'absolute', bottom: 6, left: 0, right: 0, alignItems: 'center',
   },
   pipLabelTxt: {
     color: 'rgba(255,255,255,0.85)', fontSize: 9, fontWeight: '600',
-    backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 5,
-    paddingVertical: 2, borderRadius: 6, overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden',
   },
   pipHandle: {
-    position: 'absolute', top: 6, right: 6,
-    flexDirection: 'row', gap: 2,
+    position: 'absolute', top: 7, right: 7,
+    flexDirection: 'row', gap: 3,
   },
   dot: {
     width: 3, height: 3, borderRadius: 1.5,
-    backgroundColor: 'rgba(255,255,255,0.5)',
-  },
-
-  ctrlOuter: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20 },
-  controls: {
-    flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center',
-    paddingVertical: 22, paddingHorizontal: 8,
-    paddingBottom: Platform.OS === 'ios' ? 24 : 28,
-    backgroundColor: 'rgba(8,8,8,0.75)',
-  },
-  ctrlWrap: { alignItems: 'center', gap: 7, minWidth: 58 },
-  ctrl: {
-    width: 54, height: 54, borderRadius: 27,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: C.ctrl, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
-  },
-  ctrlActive: { backgroundColor: C.ctrlOn, borderColor: 'rgba(255,255,255,0.30)' },
-  ctrlLbl: { color: C.whiteD, fontSize: 10, fontWeight: '500', letterSpacing: 0.3 },
-  endBtn: {
-    width: 68, height: 68, borderRadius: 34, backgroundColor: C.red,
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: C.red, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.55, shadowRadius: 14, elevation: 10,
+    backgroundColor: 'rgba(255,255,255,0.45)',
   },
 })

@@ -4,9 +4,9 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
-// Web এ notifee এবং firebase/messaging mock করা হচ্ছে
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (platform === 'web') {
+    // ✅ notifee mock
     if (
       moduleName === '@notifee/react-native' ||
       moduleName.startsWith('@notifee/react-native/')
@@ -17,6 +17,7 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       };
     }
 
+    // ✅ firebase/messaging mock
     if (
       moduleName === '@react-native-firebase/messaging' ||
       moduleName.startsWith('@react-native-firebase/messaging/')
@@ -26,12 +27,22 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
         type: 'sourceFile',
       };
     }
+
+    // ✅ react-native-webrtc mock (RTCView web এ কাজ করে না)
+    if (
+      moduleName === 'react-native-webrtc' ||
+      moduleName.startsWith('react-native-webrtc/')
+    ) {
+      return {
+        filePath: path.resolve(__dirname, 'webrtc-mock.web.js'),
+        type: 'sourceFile',
+      };
+    }
   }
 
   return context.resolveRequest(context, moduleName, platform);
 };
 
-// cjs + mjs support
 config.resolver.sourceExts = [
   ...config.resolver.sourceExts,
   'cjs',

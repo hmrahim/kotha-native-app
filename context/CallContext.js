@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useReducer, useRef } from 
 import { preWarmForCall } from '../services/webrtc'
 import { getSocket } from '../services/socket'
 import { startRingtone, stopRingtone } from '../services/sounds'
+import { cancelCallNotification } from '../services/fcm'
 import { useAuth } from './AuthContext'
 
 const CallContext = createContext(null)
@@ -112,22 +113,27 @@ export function CallProvider({ children }) {
       })
 
       // ── End / reject / cancel / timeout ──────────────────────────────
-      socket.on('call:rejected', () => {
-        safeStop()
-        dispatch({ type: 'RESET' })
-      })
-      socket.on('call:canceled', () => {
-        safeStop()
-        dispatch({ type: 'RESET' })
-      })
-      socket.on('call:ended', () => {
-        safeStop()
-        dispatch({ type: 'RESET' })
-      })
-      socket.on('call:timeout', () => {
-        safeStop()
-        dispatch({ type: 'RESET' })
-      })
+socket.on('call:rejected', () => {
+  safeStop()
+  cancelCallNotification(stateRef.current.callId).catch(() => {})
+  dispatch({ type: 'RESET' })
+})
+socket.on('call:canceled', () => {
+  safeStop()
+  cancelCallNotification(stateRef.current.callId).catch(() => {})
+  dispatch({ type: 'RESET' })
+})
+socket.on('call:ended', () => {
+  safeStop()
+  cancelCallNotification(stateRef.current.callId).catch(() => {})
+  dispatch({ type: 'RESET' })
+})
+socket.on('call:timeout', () => {
+  safeStop()
+  cancelCallNotification(stateRef.current.callId).catch(() => {})
+  dispatch({ type: 'RESET' })
+})
+
 
       registered = true
       console.log('[CallContext] Socket listeners registered ✅')

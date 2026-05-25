@@ -140,3 +140,53 @@ export const getFallbackVideoConstraints = () => ({
   frameRate: { ideal: 24 },
   facingMode: 'user',
 })
+
+
+// ─── Audio SDP Optimizer ──────────────────────────────────────────────────────
+// Opus codec কে voice mode এ configure করা হচ্ছে।
+// DTX: silence এ কোনো packet পাঠাবে না → background noise আসবে না
+// FEC: packet loss এ voice টুকু রক্ষা করবে
+// maxaveragebitrate: voice এর জন্য 32kbps যথেষ্ট, বেশি হলে noise ও বাড়ে
+export const optimizeAudioSdp = (sdp) => {
+  if (!sdp) return sdp
+
+  const lines  = sdp.split('\n')
+  const result = []
+
+  // Opus payload type খুঁজে বের করো
+  let opusPayload = null
+  for (const line of lines) {
+    const match = line.match(/a=rtpmap:(\d+) opus\/48000/)
+    if (match) { opusPayload = match[1]; break }
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+
+    // আগের opus fmtp line থাকলে replace করো
+    if (opusPayload && line.startsWith(`a=fmtp:${opusPayload}`)) {
+      result.push(
+        `a=fmtp:${opusPayload} minptime=10;useinbandfec=1;usedtx=1;` +
+        `stereo=0;maxaveragebitrate=32000;cbr=0;` +
+        `sprop-maxcapturerate=16000`
+      )
+      continue
+    }
+
+    result.push(lines[i])
+
+    // fmtp না থাকলে rtpmap এর পরে inject করো
+    if (opusPayload && line.startsWith(`a=rtpmap:${opusPayload} opus`)) {
+      const nextLine = lines[i + 1]?.trim() || ''
+      if (!nextLine.startsWith(`a=fmtp:${opusPayload}`)) {
+        result.push(
+          `a=fmtp:${opusPayload} minptime=10;useinbandfec=1;usedtx=1;` +
+          `stereo=0;maxaveragebitrate=32000;cbr=0;` +
+          `sprop-maxcapturerate=16000`
+        )
+      }
+    }
+  }
+
+  return result.join('\n')
+}
