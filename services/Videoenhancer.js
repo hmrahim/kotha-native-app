@@ -1,36 +1,27 @@
-/**
- * Videoenhancer.js
- * 
- * Real-time video quality enhancement for WebRTC calls.
- * 
- * কীভাবে কাজ করে:
- *   ১. SDP bitrate injection  → offer/answer এ b=AS: line দিয়ে bandwidth force করা
- *   ২. RTCRtpSender params    → connection এর পর encoding quality boost
- *   ৩. Camera constraints     → initLocalStream এ higher quality request
- * 
- * এই ৩টা layer মিলিয়ে খারাপ camera র video অনেক বেশি clear দেখাবে।
- */
 
-// ─── Enhancement config ───────────────────────────────────────────────────────
+// ─── Network profiles ────────────────────────────────────────────────────────
+// Adaptive bitrate: rampup করবে monitorAndAdapt() থেকে
 export const ENHANCE_CONFIG = {
-  // Video bitrate — default WebRTC ~300kbps, এখন 800kbps force করা হচ্ছে
-  targetBitrateKbps: 800,
+  // Start LOW — packet loss থাকলে এখানেই থাকবে
+  startBitrateKbps:  250,
+  // Cap (good network এ এই পর্যন্ত যেতে পারে)
+  maxBitrateKbps:    900,
+  // Floor (slow network এও এর নিচে যাবে না)
+  minBitrateKbps:    120,
 
-  // Frame rate
-  targetFramerate: 30,
+  targetFramerate:   24,
+  minFramerate:      12,
 
-  // Camera resolution
-  idealWidth:  1280,
-  idealHeight: 720,
-  minWidth:    320,
-  minHeight:   240,
+  // Camera resolution — small = fast encode, less drop
+  idealWidth:        640,
+  idealHeight:       480,
+  minWidth:          320,
+  minHeight:         240,
 }
 
 // ─── SDP Bitrate Booster ──────────────────────────────────────────────────────
-// Offer/Answer এর SDP এ b=AS: line inject করে video bitrate force করা।
-// এটা সবচেয়ে reliable method — সব WebRTC implementation এ কাজ করে।
-// খারাপ camera র ক্ষেত্রে এই একটা fix ই quality অনেক উন্নত করে।
-export const boostSdpBitrate = (sdp, bitrateKbps = ENHANCE_CONFIG.targetBitrateKbps) => {
+// b=AS line video section এ inject — start bitrate দিয়ে
+export const boostSdpBitrate = (sdp, bitrateKbps = ENHANCE_CONFIG.startBitrateKbps) => {
   if (!sdp) return sdp
 
   const lines = sdp.split('\n')
@@ -50,10 +41,9 @@ export const boostSdpBitrate = (sdp, bitrateKbps = ENHANCE_CONFIG.targetBitrateK
       inVideoSection = false
     }
 
-    // Video section এ c= line এর পরে b=AS inject করো
+    // Video section এ c= line এর পরে b=AS inject
     if (inVideoSection && line.startsWith('c=')) {
       result.push(lines[i])
-      // পরের line যদি b= না হয় তাহলে inject করো
       if (!lines[i + 1]?.trim().startsWith('b=')) {
         result.push(`b=AS:${bitrateKbps}`)
         result.push(`b=TIAS:${bitrateKbps * 1000}`)
@@ -61,7 +51,6 @@ export const boostSdpBitrate = (sdp, bitrateKbps = ENHANCE_CONFIG.targetBitrateK
       continue
     }
 
-    // Existing b= line কে replace করো
     if (inVideoSection && line.startsWith('b=')) {
       result.push(`b=AS:${bitrateKbps}`)
       result.push(`b=TIAS:${bitrateKbps * 1000}`)
@@ -74,119 +63,147 @@ export const boostSdpBitrate = (sdp, bitrateKbps = ENHANCE_CONFIG.targetBitrateK
   return result.join('\n')
 }
 
-// ─── RTCRtpSender Encoding Booster ───────────────────────────────────────────
-// Connection হওয়ার পর RTCRtpSender এর encoding parameters set করে।
-// maxBitrate, maxFramerate, priority — সব force করা হচ্ছে।
-export const boostVideoEncoding = async (peerConnection, config = ENHANCE_CONFIG) => {
+// ─── RTCRtpSender Encoding (initial low quality) ─────────────────────────────
+export const boostVideoEncoding = async (peerConnection, bitrateKbps = ENHANCE_CONFIG.startBitrateKbps) => {
   if (!peerConnection) return
-
   try {
     const senders = peerConnection.getSenders ? peerConnection.getSenders() : []
-    if (!senders || senders.length === 0) {
-      console.log('[VideoEnhancer] No senders found — skipping encoding boost')
-      return
-    }
-
     for (const sender of senders) {
       if (!sender.track || sender.track.kind !== 'video') continue
-
-      // getParameters support check
       if (typeof sender.getParameters !== 'function') continue
+
       const params = sender.getParameters()
       if (!params) continue
-
-      if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}]
-      }
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}]
 
       params.encodings = params.encodings.map((enc) => ({
         ...enc,
-        maxBitrate:            config.targetBitrateKbps * 1000,
-        maxFramerate:          config.targetFramerate,
+        maxBitrate:            bitrateKbps * 1000,
+        maxFramerate:          ENHANCE_CONFIG.targetFramerate,
         scaleResolutionDownBy: 1.0,
-        // Priority: high quality — network পারলে সর্বোচ্চ quality পাঠাবে
-        networkPriority: 'high',
-        priority:        'high',
+        networkPriority:       'high',
+        priority:              'high',
+        // Adaptive: encoder নিজে frame drop করতে পারবে
+        adaptivePtime:         true,
       }))
 
       if (typeof sender.setParameters === 'function') {
         await sender.setParameters(params)
-        console.log(`[VideoEnhancer] ✅ Encoding boosted → ${config.targetBitrateKbps}kbps @ ${config.targetFramerate}fps`)
+        console.log(`[VideoEnhancer] Init encoding → ${bitrateKbps}kbps @ ${ENHANCE_CONFIG.targetFramerate}fps`)
       }
     }
   } catch (err) {
-    // Non-critical — call চলতে থাকবে, শুধু boost হবে না
-    console.warn('[VideoEnhancer] Encoding boost skipped:', err.message)
+    console.warn('[VideoEnhancer] init encoding skipped:', err.message)
   }
 }
 
-// ─── Enhanced Camera Constraints ─────────────────────────────────────────────
-// initLocalStream এ use করার জন্য improved constraints।
-// Fallback constraints ও দেওয়া আছে যদি device support না করে।
+// ─── Adaptive bitrate (runs every 3s during call) ────────────────────────────
+// Network condition দেখে video bitrate কে up/down করে — call drop হবে না।
+let adaptInterval = null
+let prevPacketsLost = 0
+let prevPacketsTotal = 0
+let currentBitrate = ENHANCE_CONFIG.startBitrateKbps
+
+export const startAdaptiveBitrate = (peerConnection) => {
+  if (!peerConnection || adaptInterval) return
+  currentBitrate = ENHANCE_CONFIG.startBitrateKbps
+  prevPacketsLost = 0
+  prevPacketsTotal = 0
+
+  adaptInterval = setInterval(async () => {
+    try {
+      if (!peerConnection.getStats) return
+      const stats = await peerConnection.getStats()
+      let lost = 0, total = 0, rtt = 0
+
+      stats.forEach((report) => {
+        if (report.type === 'outbound-rtp' && report.kind === 'video') {
+          total = report.packetsSent || 0
+        }
+        if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+          lost = report.packetsLost || 0
+          rtt  = report.roundTripTime || 0
+        }
+      })
+
+      const deltaLost  = Math.max(0, lost  - prevPacketsLost)
+      const deltaTotal = Math.max(1, total - prevPacketsTotal)
+      const lossRatio  = deltaLost / deltaTotal
+      prevPacketsLost  = lost
+      prevPacketsTotal = total
+
+      // Decision:
+      //   >5% loss OR rtt>0.5s   → step DOWN aggressively
+      //   <1% loss AND rtt<0.3s  → step UP slowly
+      let newBitrate = currentBitrate
+      if (lossRatio > 0.05 || rtt > 0.5) {
+        newBitrate = Math.max(ENHANCE_CONFIG.minBitrateKbps, Math.floor(currentBitrate * 0.7))
+      } else if (lossRatio < 0.01 && rtt < 0.3 && rtt > 0) {
+        newBitrate = Math.min(ENHANCE_CONFIG.maxBitrateKbps, Math.floor(currentBitrate * 1.15))
+      }
+
+      if (newBitrate !== currentBitrate) {
+        currentBitrate = newBitrate
+        await boostVideoEncoding(peerConnection, newBitrate)
+        console.log(`[Adaptive] loss=${(lossRatio * 100).toFixed(1)}% rtt=${(rtt * 1000).toFixed(0)}ms → ${newBitrate}kbps`)
+      }
+    } catch (_) {}
+  }, 3000)
+}
+
+export const stopAdaptiveBitrate = () => {
+  if (adaptInterval) {
+    clearInterval(adaptInterval)
+    adaptInterval = null
+  }
+}
+
+// ─── Enhanced Camera Constraints (LOW for fast encode) ───────────────────────
 export const getEnhancedVideoConstraints = (config = ENHANCE_CONFIG) => ({
-  width:     { min: config.minWidth,  ideal: config.idealWidth,  max: 1920 },
-  height:    { min: config.minHeight, ideal: config.idealHeight, max: 1080 },
-  frameRate: { min: 15,               ideal: config.targetFramerate, max: 60 },
+  width:     { min: config.minWidth,  ideal: config.idealWidth,  max: 1280 },
+  height:    { min: config.minHeight, ideal: config.idealHeight, max: 720 },
+  frameRate: { min: config.minFramerate, ideal: config.targetFramerate, max: 30 },
   facingMode: 'user',
-  // Hardware-level improvements — supported device এ কাজ করে
-  advanced: [
-    { width: config.idealWidth, height: config.idealHeight },
-  ],
 })
 
 export const getFallbackVideoConstraints = () => ({
-  width:     { ideal: 640 },
-  height:    { ideal: 480 },
-  frameRate: { ideal: 24 },
+  width:     { ideal: 320 },
+  height:    { ideal: 240 },
+  frameRate: { ideal: 15 },
   facingMode: 'user',
 })
 
-
 // ─── Audio SDP Optimizer ──────────────────────────────────────────────────────
-// Opus codec কে voice mode এ configure করা হচ্ছে।
-// DTX: silence এ কোনো packet পাঠাবে না → background noise আসবে না
-// FEC: packet loss এ voice টুকু রক্ষা করবে
-// maxaveragebitrate: voice এর জন্য 32kbps যথেষ্ট, বেশি হলে noise ও বাড়ে
+// Opus: FEC ON (packet loss recovery), DTX ON (silence এ no packet),
+// maxaveragebitrate 24kbps voice এর জন্য — slow network এ smooth
 export const optimizeAudioSdp = (sdp) => {
   if (!sdp) return sdp
-
   const lines  = sdp.split('\n')
   const result = []
-
-  // Opus payload type খুঁজে বের করো
   let opusPayload = null
   for (const line of lines) {
     const match = line.match(/a=rtpmap:(\d+) opus\/48000/)
     if (match) { opusPayload = match[1]; break }
   }
-
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim()
-
-    // আগের opus fmtp line থাকলে replace করো
     if (opusPayload && line.startsWith(`a=fmtp:${opusPayload}`)) {
       result.push(
         `a=fmtp:${opusPayload} minptime=10;useinbandfec=1;usedtx=1;` +
-        `stereo=0;maxaveragebitrate=32000;cbr=0;` +
-        `sprop-maxcapturerate=16000`
+        `stereo=0;maxaveragebitrate=24000;cbr=0;sprop-maxcapturerate=16000`
       )
       continue
     }
-
     result.push(lines[i])
-
-    // fmtp না থাকলে rtpmap এর পরে inject করো
     if (opusPayload && line.startsWith(`a=rtpmap:${opusPayload} opus`)) {
       const nextLine = lines[i + 1]?.trim() || ''
       if (!nextLine.startsWith(`a=fmtp:${opusPayload}`)) {
         result.push(
           `a=fmtp:${opusPayload} minptime=10;useinbandfec=1;usedtx=1;` +
-          `stereo=0;maxaveragebitrate=32000;cbr=0;` +
-          `sprop-maxcapturerate=16000`
+          `stereo=0;maxaveragebitrate=24000;cbr=0;sprop-maxcapturerate=16000`
         )
       }
     }
   }
-
   return result.join('\n')
 }

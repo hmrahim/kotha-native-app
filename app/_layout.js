@@ -177,6 +177,8 @@ function AppNavigator() {
     if (!nativeSplashHidden || loading) return
     const inAuth   = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
     const inVerify = segments[0] === 'verify-email'
+    // ✅ Fix: (tab) group-এ থাকলে আবার redirect করো না — double-navigate prevent
+    const inTab    = segments[0] === '(tab)'
 
     const t = setTimeout(() => {
       if (!user) {
@@ -184,7 +186,8 @@ function AppNavigator() {
       } else if (!emailVerified) {
         if (!inVerify) router.replace('/verify-email')
       } else {
-        if (inAuth || inVerify || segments.length === 0) router.replace('/(tab)')
+        // ✅ inTab হলে আর replace করো না (unnecessary navigation বন্ধ)
+        if (inAuth || inVerify || (!inTab && segments.length === 0)) router.replace('/(tab)')
       }
     }, 0)
 

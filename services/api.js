@@ -1,13 +1,9 @@
 import axios from 'axios'
 import { getAuth } from '../firebase/firebaseConfig'
 
-// Read from EXPO_PUBLIC_* env (set in .env) — falls back to extra in app.json
-// const API_URL =
-//   process.env.EXPO_PUBLIC_API_URL ||
-//   Constants.expoConfig?.extra?.apiUrl ||
-//   'http://localhost:5000/api'
-const API_URL ='http://192.168.100.185:5000/api'
-// const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.185:5000/api'
+
+const API_URL ='https://kotha-server-c5wy.onrender.com/api'
+
 
 console.log('🌐 API base URL:', API_URL)
 

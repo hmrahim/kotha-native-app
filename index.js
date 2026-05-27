@@ -8,7 +8,7 @@ import messaging from '@react-native-firebase/messaging'
 // এখানে কোনো React component বা context use করা যাবে না।
 // শুধু raw JS — AsyncStorage, fetch, notifee।
 
-const API_URL = 'http://192.168.100.185:5000/api'
+const API_URL = 'https://kotha-server-c5wy.onrender.com/api'
 
 // ─── Channel Setup ────────────────────────────────────────────────────────────
 // App killed state এও channel exist করা দরকার।
@@ -53,8 +53,8 @@ async function showCallNotification(data) {
         fullScreenAction: { id: 'default', launchActivity: 'default' },
         pressAction:      { id: 'default', launchActivity: 'default' },
         actions: [
-          { title: '✅ Accept',  pressAction: { id: 'accept',  launchActivity: 'default' } },
-          { title: '❌ Decline', pressAction: { id: 'decline' } },
+          { title: ' Accept',  pressAction: { id: 'accept',  launchActivity: 'default' } },
+          { title: ' Decline', pressAction: { id: 'decline' } },
         ],
         sound:            'ringtun',    // ✅ FIX: actual filename
         vibrationPattern: [100, 1000, 500, 1000],

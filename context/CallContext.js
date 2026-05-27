@@ -1,11 +1,21 @@
-
 import { useRouter } from 'expo-router'
 import React, { createContext, useContext, useEffect, useReducer, useRef } from 'react'
+import { Platform } from 'react-native'
 import { preWarmForCall } from '../services/webrtc'
 import { getSocket } from '../services/socket'
 import { startRingtone, stopRingtone } from '../services/sounds'
-import { cancelCallNotification } from '../services/fcm'
 import { useAuth } from './AuthContext'
+
+// ✅ Platform guard: fcm শুধু native-এ import করো
+let cancelCallNotification = async () => {}
+if (Platform.OS !== 'web') {
+  try {
+    const fcm = require('../services/fcm')
+    cancelCallNotification = fcm.cancelCallNotification
+  } catch (e) {
+    console.warn('[CallContext] FCM import failed:', e?.message)
+  }
+}
 
 const CallContext = createContext(null)
 
@@ -33,14 +43,10 @@ function reducer(state, action) {
 }
 
 const safeStart = () => {
-  try {
-    startRingtone()
-  } catch (_) {}
+  try { startRingtone() } catch (_) {}
 }
 const safeStop = () => {
-  try {
-    stopRingtone()
-  } catch (_) {}
+  try { stopRingtone() } catch (_) {}
 }
 
 export function CallProvider({ children }) {
@@ -57,7 +63,6 @@ export function CallProvider({ children }) {
     let registered = false
 
     const registerListeners = (socket) => {
-      // Remove old listeners
       socket.off('call:incoming')
       socket.off('call:accepted')
       socket.off('call:rejected')
@@ -67,18 +72,12 @@ export function CallProvider({ children }) {
 
       // ── Incoming call ──────────────────────────────────────────────────
       socket.on('call:incoming', (data) => {
-        // Ignore if already in call
         if (stateRef.current.phase !== 'idle') {
-          console.log(
-            '[CallContext] Ignoring incoming — already in call:',
-            stateRef.current.phase
-          )
+          console.log('[CallContext] Ignoring incoming — already in call:', stateRef.current.phase)
           return
         }
 
         console.log('[CallContext] Incoming call from:', data.callerName)
-
-        // Pre-warm WebRTC
         preWarmForCall(data.type || 'voice').catch(() => {})
 
         dispatch({
@@ -96,60 +95,52 @@ export function CallProvider({ children }) {
         })
 
         safeStart()
-        router.push({ pathname: '/incoming-call', params: {} })
+        try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) {}
       })
 
       // ── Caller side: callee accepted ────────────────────────────────
       socket.on('call:accepted', (data) => {
         safeStop()
-
         if (stateRef.current.callId !== data.callId) {
           console.warn('[CallContext] call:accepted — callId mismatch, ignoring')
           return
         }
-
         console.log('[CallContext] call:accepted — callee joined, state ACTIVE')
         dispatch({ type: 'ACTIVE' })
       })
 
       // ── End / reject / cancel / timeout ──────────────────────────────
-socket.on('call:rejected', () => {
-  safeStop()
-  cancelCallNotification(stateRef.current.callId).catch(() => {})
-  dispatch({ type: 'RESET' })
-})
-socket.on('call:canceled', () => {
-  safeStop()
-  cancelCallNotification(stateRef.current.callId).catch(() => {})
-  dispatch({ type: 'RESET' })
-})
-socket.on('call:ended', () => {
-  safeStop()
-  cancelCallNotification(stateRef.current.callId).catch(() => {})
-  dispatch({ type: 'RESET' })
-})
-socket.on('call:timeout', () => {
-  safeStop()
-  cancelCallNotification(stateRef.current.callId).catch(() => {})
-  dispatch({ type: 'RESET' })
-})
-
+      socket.on('call:rejected', () => {
+        safeStop()
+        cancelCallNotification(stateRef.current.callId).catch(() => {})
+        dispatch({ type: 'RESET' })
+      })
+      socket.on('call:canceled', () => {
+        safeStop()
+        cancelCallNotification(stateRef.current.callId).catch(() => {})
+        dispatch({ type: 'RESET' })
+      })
+      socket.on('call:ended', () => {
+        safeStop()
+        cancelCallNotification(stateRef.current.callId).catch(() => {})
+        dispatch({ type: 'RESET' })
+      })
+      socket.on('call:timeout', () => {
+        safeStop()
+        cancelCallNotification(stateRef.current.callId).catch(() => {})
+        dispatch({ type: 'RESET' })
+      })
 
       registered = true
       console.log('[CallContext] Socket listeners registered ✅')
     }
 
-    // Register if socket is ready
     const existing = getSocket()
     if (existing?.connected) registerListeners(existing)
 
-    // Re-register on reconnect
     const interval = setInterval(() => {
       const socket = getSocket()
-      if (!socket?.connected) {
-        registered = false
-        return
-      }
+      if (!socket?.connected) { registered = false; return }
       if (registered) return
       registerListeners(socket)
     }, 600)

@@ -2,7 +2,7 @@
 // ✅ expo-audio ব্যবহার করা হচ্ছে — expo-av এর thread crash fix
 // Metro web build এ automatically sounds.web.js ব্যবহার হবে
 
-import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio'
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio'
 
 // ─── Sound objects cache ──────────────────────────────────────────────────────
 const _players = {}

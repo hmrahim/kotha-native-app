@@ -2,20 +2,20 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Animated,
-  Dimensions,
-  Image,
-  Platform,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Animated,
+    Dimensions,
+    Image,
+    Platform,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native'
 import { useCall } from '../context/CallContext'
-import { preWarmForCall, getLocalStream } from '../services/webrtc'
 import { getSocket } from '../services/socket'
 import { stopRingtone } from '../services/sounds'
+import { getLocalStream, preWarmForCall } from '../services/webrtc'
 
 let RTCView = null
 if (Platform.OS !== 'web') {

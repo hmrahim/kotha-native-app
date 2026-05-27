@@ -2,7 +2,7 @@
 import { Platform } from 'react-native'
 import { io } from 'socket.io-client'
 
-const SERVER_URL = 'http://192.168.100.185:5000'
+const SERVER_URL = 'https://kotha-server-c5wy.onrender.com'
 
 console.log('🔌 Socket URL:', SERVER_URL)
 

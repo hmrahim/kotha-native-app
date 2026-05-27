@@ -1,8 +1,8 @@
-import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Animated,
+  AppState,
   Dimensions,
   Image,
   PanResponder,
@@ -15,6 +15,9 @@ import {
   View,
 } from 'react-native'
 import { useCall } from '../context/CallContext'
+import { FloatingBubble } from '../services/FloatingBubble'
+import { getSocket } from '../services/socket'
+import { startRingback, stopRingback } from '../services/sounds'
 import {
   addIceCandidate,
   cleanup,
@@ -25,13 +28,12 @@ import {
   requestCallPermissions,
   setMuted,
   setRemoteDescription,
-  setVideoMuted,
   setSpeaker,
+  setVideoMuted,
   startAudioSession,
   switchCamera,
 } from '../services/webrtc'
-import { getSocket } from '../services/socket'
-import { startRingback, stopRingback } from '../services/sounds'
+import { Ionicons } from '@expo/vector-icons'
 
 let RTCView = null
 if (Platform.OS !== 'web') {
@@ -58,7 +60,6 @@ const PIP_MARGIN = 16
 const PIP_MAX_X = W - PIP_W - PIP_MARGIN
 const PIP_MAX_Y = H - PIP_H - 130
 
-// ── Design tokens ─────────────────────────────────────────────────────────────
 const C = {
   bg: '#050810',
   surface: '#0D1220',
@@ -79,7 +80,6 @@ const C = {
   ctrlActive: 'rgba(255,255,255,0.22)',
 }
 
-// ── Animated background — deep space orbs ─────────────────────────────────────
 function SpaceBackground({ accent }) {
   const a1 = useRef(new Animated.Value(0)).current
   const a2 = useRef(new Animated.Value(0)).current
@@ -97,10 +97,8 @@ function SpaceBackground({ accent }) {
     loop(a3, 3500, 1600)
   }, [])
 
-  const color1 = accent === 'green'
-    ? 'rgba(0,229,160,0.10)' : 'rgba(79,142,247,0.10)'
-  const color2 = accent === 'green'
-    ? 'rgba(0,180,130,0.07)' : 'rgba(120,80,255,0.08)'
+  const color1 = accent === 'green' ? 'rgba(0,229,160,0.10)' : 'rgba(79,142,247,0.10)'
+  const color2 = accent === 'green' ? 'rgba(0,180,130,0.07)' : 'rgba(120,80,255,0.08)'
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -132,7 +130,6 @@ function SpaceBackground({ accent }) {
   )
 }
 
-// ── Pulsing rings around avatar (waiting state) ───────────────────────────────
 function PulseRings({ color, active }) {
   const r1s = useRef(new Animated.Value(1)).current
   const r1o = useRef(new Animated.Value(0.45)).current
@@ -155,7 +152,6 @@ function PulseRings({ color, active }) {
           Animated.timing(opacity, { toValue: opacity === r1o ? 0.45 : opacity === r2o ? 0.28 : 0.15, duration: 0, useNativeDriver: true }),
         ]),
       ])).start()
-
     ring(r1s, r1o, 0)
     ring(r2s, r2o, 600)
     ring(r3s, r3o, 1200)
@@ -175,7 +171,6 @@ function PulseRings({ color, active }) {
   )
 }
 
-// ── Control button ────────────────────────────────────────────────────────────
 function CtrlBtn({ icon, label, onPress, active = false, danger = false }) {
   const sc = useRef(new Animated.Value(1)).current
   const bgColor = danger ? C.red : active ? C.ctrlActive : C.ctrl
@@ -201,7 +196,6 @@ function CtrlBtn({ icon, label, onPress, active = false, danger = false }) {
   )
 }
 
-// ── Main screen ───────────────────────────────────────────────────────────────
 export default function CallScreen() {
   const params = useLocalSearchParams()
   const router = useRouter()
@@ -227,8 +221,9 @@ export default function CallScreen() {
   const [netWeak, setNetWeak] = useState(false)
   const [ctrlShown, setCtrlShown] = useState(true)
   const [swapped, setSwapped] = useState(false)
+  // ✅ NEW — true when Android Picture-in-Picture mode is active
+  const [inPiP, setInPiP] = useState(false)
 
-  // Animations
   const ctrlOpacity = useRef(new Animated.Value(1)).current
   const pipScale = useRef(new Animated.Value(0)).current
   const pipSizeScale = useRef(new Animated.Value(1)).current
@@ -260,8 +255,8 @@ export default function CallScreen() {
   const pendingIceRef = useRef([])
   const offerSentRef = useRef(false)
   const lastDistRef = useRef(null)
+  const callStartedAtRef = useRef(0)
 
-  // Entry animation
   useEffect(() => {
     Animated.stagger(120, [
       Animated.parallel([
@@ -279,7 +274,6 @@ export default function CallScreen() {
     ]).start()
   }, [])
 
-  // Timer glow pulse when connected
   useEffect(() => {
     if (!connected) return
     Animated.loop(Animated.sequence([
@@ -288,7 +282,6 @@ export default function CallScreen() {
     ])).start()
   }, [connected])
 
-  // PanResponder for PiP drag
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: (_, g) => g.numberActiveTouches === 1,
@@ -370,11 +363,102 @@ export default function CallScreen() {
     }
   }, [connected, isVideo])
 
-  const handleEnd = useCallback((remote = false) => {
-    if (!remote) getSocket()?.emit('call:end', { callId })
-    dispatch({ type: 'RESET' })
-    try { router.back() } catch (_) { }
-  }, [callId, dispatch, router])
+const handleEnd = useCallback((remote = false) => {
+  try { FloatingBubble.hide() } catch (_) { }
+  if (!remote) getSocket()?.emit('call:end', { callId })
+  dispatch({ type: 'RESET' })
+  try {
+    if (router.canGoBack()) router.back()
+    else router.replace('/(tab)/calls')
+  } catch (_) { }
+}, [callId, dispatch, router])
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     ✅ FLOATING BUBBLE + PICTURE-IN-PICTURE  (the big fix)
+
+     Strategy:
+       • VIDEO call → enter Android Picture-in-Picture mode when going to
+         background. The whole call screen shrinks into a floating window
+         that continues to render REAL live remote + local video (just like
+         WhatsApp / Telegram / Meet). We hide decorations via `inPiP` state.
+
+       • VOICE call → show a small overlay bubble with peer name, duration
+         and an end-call button (no live video to show anyway).
+
+       • In BOTH cases the native FloatingBubbleService runs in foreground
+         with type=microphone(+camera). This is what keeps the WebRTC mic
+         and camera alive in background on Android 14+ — the previous
+         "phoneCall" service type silently revoked mic/camera, which was
+         exactly why your call was dying the moment the app went to bg.
+     ───────────────────────────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    if (!FloatingBubble.isSupported) return
+
+    // Ask for overlay permission once. (Used as fallback for video and
+    // always for voice.) Non-blocking.
+    FloatingBubble.hasPermission().then((has) => {
+      if (!has) FloatingBubble.requestPermission()
+    })
+
+    // PiP-mode listener — emitted from MainActivity#onPictureInPictureModeChanged
+    const offPiP = FloatingBubble.onPiPModeChanged((isInPiP) => {
+      if (!mountedRef.current) return
+      setInPiP(!!isInPiP)
+    })
+
+    const handleBackground = async () => {
+      if (!mountedRef.current) return
+      // Always start the foreground service first — this keeps mic/camera
+      // alive even if PiP fails or overlay permission is denied.
+      FloatingBubble.show({
+        peerName: String(peerName || ''),
+        callType: isVideo ? 'video' : 'voice',
+        startedAt: callStartedAtRef.current || Date.now(),
+        avatar: String(peerAvatar || ''),
+      })
+
+      if (isVideo) {
+        // Try PiP — best UX: real live video preview floats on screen.
+        const ok = await FloatingBubble.enterPiP(true)
+        if (ok) {
+          // PiP succeeded; hide the overlay bubble so it doesn't double up.
+          FloatingBubble.hide()
+        }
+        // If PiP failed (e.g. permission denied, OS limit), the overlay
+        // bubble we already started stays visible.
+      }
+    }
+
+    const sub = AppState.addEventListener('change', (next) => {
+      if (!mountedRef.current) return
+      if (next === 'background' || next === 'inactive') {
+        handleBackground()
+      } else if (next === 'active') {
+        // Back in foreground — hide overlay bubble (PiP mode will dismiss
+        // itself automatically when user taps it).
+        FloatingBubble.hide()
+      }
+    })
+
+    // Bubble events
+    const offTap = FloatingBubble.onTapped(() => {
+      // bubble tapped → app already brought to front by native side, just hide bubble
+      FloatingBubble.hide()
+    })
+    const offEnd = FloatingBubble.onEndCallPressed(() => {
+      handleEnd(false)
+    })
+
+    return () => {
+      try { sub.remove() } catch (_) { }
+      try { offTap() } catch (_) { }
+      try { offEnd() } catch (_) { }
+      try { offPiP() } catch (_) { }
+      try { FloatingBubble.hide() } catch (_) { }
+    }
+  }, [peerName, peerAvatar, isVideo, handleEnd])
 
   useEffect(() => {
     mountedRef.current = true
@@ -445,6 +529,7 @@ export default function CallScreen() {
           onRemoteStream: (rs) => {
             if (!mountedRef.current || connectedRef.current) return
             connectedRef.current = true
+            callStartedAtRef.current = Date.now()
             stopRingback().catch(() => { })
             setRemoteStreamState(rs)
             setConnected(true)
@@ -452,13 +537,16 @@ export default function CallScreen() {
             Animated.timing(remoteOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start()
             if (isVideo) scheduleHide()
             if (!timerRef.current) timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
-            // ✅ FIX: connect হওয়ার পরে WebRTC audio reset করে, তাই আবার set করতে হয়
             setTimeout(() => { setSpeaker(speakerOnRef.current) }, 500)
           },
           onIceCandidate: (candidate) => { socket?.emit('webrtc:ice-candidate', { callId, candidate }) },
           onConnectionStateChange: (state) => {
+            if (!mountedRef.current) return
             if (state === 'failed' || state === 'disconnected') setNetWeak(true)
             if (state === 'connected') setNetWeak(false)
+          },
+          onEndDueToFailure: () => {
+            if (mountedRef.current) handleEnd(true)
           },
           onError: (err) => { console.error('[Call] PC Error:', err); if (mountedRef.current) handleEnd(true) },
         })
@@ -482,6 +570,7 @@ export default function CallScreen() {
     return () => {
       mountedRef.current = false
       stopRingback().catch(() => { })
+      try { FloatingBubble.hide() } catch (_) { }
       const s = getSocket()
       s?.off('webrtc:offer', onOffer)
       s?.off('webrtc:answer', onAnswer)
@@ -507,7 +596,6 @@ export default function CallScreen() {
 
   const accentColor = isVideo ? C.accent : C.green
 
-  // ── Video renderers ───────────────────────────────────────────────────────
   const renderFullscreen = (stream, mirror = false, opacity = null) => {
     const inner = isWeb
       ? <WebVideoView stream={stream} mirror={mirror} />
@@ -535,7 +623,6 @@ export default function CallScreen() {
                 <Text style={s.pipLabelTxt}>{label}</Text>
               </View>
             )}
-            {/* Drag handle dots */}
             <View style={s.pipHandle}>
               {[0, 1, 2].map(i => <View key={i} style={s.dot} />)}
             </View>
@@ -560,6 +647,16 @@ export default function CallScreen() {
 
   const renderVideoLayers = () => {
     if (!isVideo || !connected) return null
+
+    // ✅ While in Android PiP mode, render ONLY the remote video full-screen
+    // so the tiny floating window shows the actual call (no UI chrome / no
+    // draggable pip-thumbnail overlapping it).
+    if (inPiP) {
+      return remoteStreamState
+        ? renderFullscreen(remoteStreamState, false)
+        : (!videoOff && localStreamState ? renderFullscreen(localStreamState, true) : null)
+    }
+
     if (!swapped) {
       return (
         <>
@@ -593,6 +690,18 @@ export default function CallScreen() {
     }
   }
 
+  // ✅ In PiP, render a minimal video-only view (no top bar, no controls,
+  // no avatar pulse — just the video so it looks clean inside the small
+  // floating system window).
+  if (inPiP && isVideo) {
+    return (
+      <View style={s.root}>
+        <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+        {renderVideoLayers()}
+      </View>
+    )
+  }
+
   return (
     <TouchableOpacity
       activeOpacity={1}
@@ -601,19 +710,13 @@ export default function CallScreen() {
     >
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-      {/* ── Background ── */}
       {(!isVideo || !connected) && <SpaceBackground accent={isVideo ? 'blue' : 'green'} />}
 
       {renderWaitingCamera()}
       {renderVideoLayers()}
 
-      {/* ── Top bar ── */}
       <SafeAreaView style={s.topSafe}>
-        <Animated.View style={[s.topBar, {
-          opacity: topBarOp,
-          transform: [{ translateY: topBarY }],
-        }]}>
-          {/* Type pill */}
+        <Animated.View style={[s.topBar, { opacity: topBarOp, transform: [{ translateY: topBarY }] }]}>
           <View style={[s.typePill, { borderColor: accentColor + '40', backgroundColor: accentColor + '15' }]}>
             <View style={[s.typeDot, { backgroundColor: accentColor }]} />
             <Text style={[s.typeTxt, { color: accentColor }]}>
@@ -621,7 +724,6 @@ export default function CallScreen() {
             </Text>
           </View>
 
-          {/* Timer / status */}
           <Animated.View style={[s.timerWrap, {
             shadowColor: connected ? C.green : 'transparent',
             shadowOpacity: timerGlowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.7] }),
@@ -637,7 +739,6 @@ export default function CallScreen() {
             </Text>
           </Animated.View>
 
-          {/* Swap hint */}
           {isVideo && connected && (
             <TouchableOpacity onPress={() => setSwapped(p => !p)} style={s.swapPill}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
@@ -648,15 +749,10 @@ export default function CallScreen() {
         </Animated.View>
       </SafeAreaView>
 
-      {/* ── Avatar / name (voice or waiting) ── */}
       {(!isVideo || !connected) && (
         <View style={s.center} pointerEvents="none">
           <Animated.View style={{ alignItems: 'center', opacity: avatarOp, transform: [{ scale: avatarSc }] }}>
-
-            {/* Ripple rings */}
             <PulseRings color={accentColor} active={!connected} />
-
-            {/* Avatar */}
             <View style={[s.avatarGlassRing, { borderColor: accentColor + '55', shadowColor: accentColor }]}>
               {peerAvatar
                 ? <Image source={{ uri: peerAvatar }} style={s.avatarImg} />
@@ -669,11 +765,7 @@ export default function CallScreen() {
                 )
               }
             </View>
-
-            {/* Name */}
             <Text style={s.peerName}>{peerName}</Text>
-
-            {/* Status pill */}
             <View style={[s.statusPill, { borderColor: accentColor + '35' }]}>
               {!connected && <View style={[s.statusDotAnim, { backgroundColor: accentColor }]} />}
               <Text style={[s.statusTxt, netWeak && { color: C.amber }]}>{statusText}</Text>
@@ -682,7 +774,6 @@ export default function CallScreen() {
         </View>
       )}
 
-      {/* ── Controls bar ── */}
       <Animated.View
         style={[
           s.ctrlOuter,
@@ -693,11 +784,8 @@ export default function CallScreen() {
         pointerEvents={ctrlShown || !isVideo ? 'auto' : 'none'}
       >
         <SafeAreaView>
-          {/* Frosted glass bar */}
           <View style={s.ctrlBar}>
-            {/* Thin top separator line */}
             <View style={s.ctrlBarLine} />
-
             <View style={s.controls}>
               <CtrlBtn
                 icon={muted ? 'mic-off' : 'mic'}
@@ -705,7 +793,6 @@ export default function CallScreen() {
                 active={muted}
                 onPress={() => { const v = !muted; setM(v); setMuted(v) }}
               />
-
               {isVideo && (
                 <CtrlBtn
                   icon={videoOff ? 'videocam-off' : 'videocam'}
@@ -714,15 +801,12 @@ export default function CallScreen() {
                   onPress={() => { const v = !videoOff; setVideoOff(v); setVideoMuted(v) }}
                 />
               )}
-
-              {/* End call — center, bigger */}
               <CtrlBtn
                 icon="call"
                 label="End Call"
                 danger
                 onPress={() => handleEnd(false)}
               />
-
               {isVideo && (
                 <CtrlBtn
                   icon="camera-reverse"
@@ -730,7 +814,6 @@ export default function CallScreen() {
                   onPress={() => switchCamera()}
                 />
               )}
-
               {!isVideo && (
                 <CtrlBtn
                   icon={speakerOn ? 'volume-high' : 'volume-low'}
@@ -747,192 +830,40 @@ export default function CallScreen() {
   )
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-
-  waitingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(5,8,16,0.52)',
-  },
-
-  // ── Top bar ──
-  topSafe: {
-    position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30,
-    paddingTop: Platform.OS === 'android' ? 36 : 0,
-  },
-  topBar: {
-    alignItems: 'center',
-    paddingTop: 14,
-    gap: 8,
-  },
-  typePill: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    borderWidth: 1,
-    paddingHorizontal: 14, paddingVertical: 6,
-    borderRadius: 24,
-  },
-  typeDot: {
-    width: 6, height: 6, borderRadius: 3,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 5,
-    elevation: 4,
-  },
+  waitingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(5,8,16,0.52)' },
+  topSafe: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, paddingTop: Platform.OS === 'android' ? 36 : 0 },
+  topBar: { alignItems: 'center', paddingTop: 14, gap: 8 },
+  typePill: { flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 24 },
+  typeDot: { width: 6, height: 6, borderRadius: 3, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 5, elevation: 4 },
   typeTxt: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6 },
-
   timerWrap: { elevation: 0 },
-  durationTxt: {
-    color: C.whiteDD,
-    fontSize: 16,
-    fontWeight: '300',
-    letterSpacing: 3,
-    fontVariant: ['tabular-nums'],
-  },
-
-  swapPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
-    paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: 12, marginTop: 2,
-  },
+  durationTxt: { color: C.whiteDD, fontSize: 16, fontWeight: '300', letterSpacing: 3, fontVariant: ['tabular-nums'] },
+  swapPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,255,255,0.07)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginTop: 2 },
   swapTxt: { color: C.whiteDD, fontSize: 10, letterSpacing: 0.3 },
-
-  // ── Center avatar ──
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 70,
-    paddingBottom: 160,
-    zIndex: 10,
-  },
-
-  avatarGlassRing: {
-    width: 152, height: 152, borderRadius: 76,
-    borderWidth: 2,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 30,
-    elevation: 18,
-    marginBottom: 28,
-  },
-  avatarImg: {
-    width: '100%', height: '100%', borderRadius: 74,
-  },
-  avatarFallback: {
-    width: '100%', height: '100%', borderRadius: 74,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarLetter: {
-    fontSize: 58, fontWeight: '700',
-  },
-
-  peerName: {
-    color: C.white,
-    fontSize: 30,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-    marginBottom: 14,
-    textShadowColor: 'rgba(0,0,0,0.7)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
-    maxWidth: W - 60,
-    textAlign: 'center',
-  },
-
-  statusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderWidth: 1,
-    paddingHorizontal: 16, paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  statusDotAnim: {
-    width: 6, height: 6, borderRadius: 3,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9, shadowRadius: 5,
-  },
-  statusTxt: {
-    color: C.whiteDD,
-    fontSize: 13,
-    letterSpacing: 1.0,
-    fontWeight: '400',
-  },
-
-  // ── Controls bar ──
-  ctrlOuter: {
-    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20,
-  },
-  ctrlBar: {
-    backgroundColor: 'rgba(10,14,24,0.88)',
-    borderTopWidth: 0,
-  },
-  ctrlBarLine: {
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    marginHorizontal: 0,
-  },
-  controls: {
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-    alignItems: 'center',
-    paddingVertical: 20,
-    paddingHorizontal: 10,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 30,
-  },
-
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 70, paddingBottom: 160, zIndex: 10 },
+  avatarGlassRing: { width: 152, height: 152, borderRadius: 76, borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.04)', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.55, shadowRadius: 30, elevation: 18, marginBottom: 28 },
+  avatarImg: { width: '100%', height: '100%', borderRadius: 74 },
+  avatarFallback: { width: '100%', height: '100%', borderRadius: 74, alignItems: 'center', justifyContent: 'center' },
+  avatarLetter: { fontSize: 58, fontWeight: '700' },
+  peerName: { color: C.white, fontSize: 30, fontWeight: '700', letterSpacing: 0.2, marginBottom: 14, textShadowColor: 'rgba(0,0,0,0.7)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 10, maxWidth: W - 60, textAlign: 'center' },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.04)' },
+  statusDotAnim: { width: 6, height: 6, borderRadius: 3, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 5 },
+  statusTxt: { color: C.whiteDD, fontSize: 13, letterSpacing: 1.0, fontWeight: '400' },
+  ctrlOuter: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20 },
+  ctrlBar: { backgroundColor: 'rgba(10,14,24,0.88)', borderTopWidth: 0 },
+  ctrlBarLine: { height: 1, backgroundColor: 'rgba(255,255,255,0.07)', marginHorizontal: 0 },
+  controls: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center', paddingVertical: 20, paddingHorizontal: 10, paddingBottom: Platform.OS === 'ios' ? 28 : 30 },
   ctrlWrap: { alignItems: 'center', gap: 8, minWidth: 64 },
-  ctrl: {
-    width: 58, height: 58, borderRadius: 29,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  ctrlLbl: {
-    color: C.whiteDD,
-    fontSize: 10,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-  },
-
-  // ── PiP ──
-  pipBox: {
-    position: 'absolute', width: PIP_W, height: PIP_H, zIndex: 25,
-  },
-  pipClip: {
-    flex: 1, borderRadius: 14, overflow: 'hidden',
-    backgroundColor: '#111820',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5, shadowRadius: 10, elevation: 10,
-  },
+  ctrl: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', borderWidth: 1, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
+  ctrlLbl: { color: C.whiteDD, fontSize: 10, fontWeight: '500', letterSpacing: 0.3 },
+  pipBox: { position: 'absolute', width: PIP_W, height: PIP_H, zIndex: 25 },
+  pipClip: { flex: 1, borderRadius: 14, overflow: 'hidden', backgroundColor: '#111820', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 10, elevation: 10 },
   pipRTCView: { flex: 1, borderRadius: 14 },
-  pipOff: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  pipLabel: {
-    position: 'absolute', bottom: 6, left: 0, right: 0, alignItems: 'center',
-  },
-  pipLabelTxt: {
-    color: 'rgba(255,255,255,0.85)', fontSize: 9, fontWeight: '600',
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden',
-  },
-  pipHandle: {
-    position: 'absolute', top: 7, right: 7,
-    flexDirection: 'row', gap: 3,
-  },
-  dot: {
-    width: 3, height: 3, borderRadius: 1.5,
-    backgroundColor: 'rgba(255,255,255,0.45)',
-  },
+  pipOff: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center' },
+  pipLabel: { position: 'absolute', bottom: 6, left: 0, right: 0, alignItems: 'center' },
+  pipLabelTxt: { color: 'rgba(255,255,255,0.85)', fontSize: 9, fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
+  pipHandle: { position: 'absolute', top: 7, right: 7, flexDirection: 'row', gap: 3 },
+  dot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(255,255,255,0.45)' },
 })

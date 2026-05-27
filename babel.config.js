@@ -5,5 +5,10 @@ module.exports = function (api) {
       ["babel-preset-expo", { jsxImportSource: "nativewind" }],
       "nativewind/babel",
     ],
+    plugins: [
+      ...(process.env.NODE_ENV === "production"
+        ? ["transform-remove-console"]
+        : []),
+    ],
   };
 };

@@ -1,36 +1,45 @@
+
+import { Audio } from 'expo-av'
 import { PermissionsAndroid, Platform } from 'react-native'
 import {
-  mediaDevices,
-  RTCPeerConnection,
-  RTCSessionDescription,
-  RTCIceCandidate,
+    mediaDevices,
+    RTCIceCandidate,
+    RTCPeerConnection,
+    RTCSessionDescription,
 } from 'react-native-webrtc'
 import {
-  boostSdpBitrate,
-  boostVideoEncoding,
-  getEnhancedVideoConstraints,
-  getFallbackVideoConstraints,
-  optimizeAudioSdp,           // ✅ নতুন
+    boostSdpBitrate,
+    boostVideoEncoding,
+    getEnhancedVideoConstraints,
+    getFallbackVideoConstraints,
+    optimizeAudioSdp,
+    startAdaptiveBitrate,
+    stopAdaptiveBitrate,
+    ENHANCE_CONFIG,
 } from './Videoenhancer'
-import { Audio } from 'expo-av'
-// ─── InCallManager (speaker routing) ─────────────────────────────────────────
+
 let InCallManager = null
 try {
   InCallManager = require('react-native-incall-manager').default
 } catch (_) {
-  console.warn('[WebRTC] react-native-incall-manager not found — speaker routing disabled')
+  console.warn('[WebRTC] react-native-incall-manager not found')
 }
 
-// ─── STUN + TURN servers ─────────────────────────────────────────────────────
+// ─── ICE servers (more STUN + multiple TURN for fallback) ────────────────────
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
   { urls: 'stun:stun.relay.metered.ca:80' },
+  // TURN (UDP) — fastest
   {
     urls: 'turn:openrelay.metered.ca:80',
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
+  // TURN (TCP/443) — firewall এ কাজ করবে
   {
     urls: 'turn:openrelay.metered.ca:443',
     username: 'openrelayproject',
@@ -41,23 +50,62 @@ const ICE_SERVERS = [
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
+  // TURN (TLS/443) — strict firewall এ
+  {
+    urls: 'turns:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ]
 
 const PC_CONFIG = {
   iceServers: ICE_SERVERS,
-  iceCandidatePoolSize: 4,
+  iceCandidatePoolSize: 10,         // ✅ more candidates → faster ICE
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
   sdpSemantics: 'unified-plan',
+  // 'all' = STUN+TURN both. কোনো একটা fail হলে অন্যটা ব্যবহার হবে।
+  iceTransportPolicy: 'all',
 }
 
 let localStream    = null
 let remoteStream   = null
 let peerConnection = null
 
-// ICE buffer
 let pendingCandidates = []
 let remoteDescSet     = false
+
+// ─── ICE restart watchdog ────────────────────────────────────────────────────
+let iceRestartTimer  = null
+let iceRestartCount  = 0
+let lastRestartAt    = 0
+let endCallTimer     = null
+let onWatchdogEnd    = null
+
+const clearWatchdogs = () => {
+  if (iceRestartTimer) { clearTimeout(iceRestartTimer);  iceRestartTimer = null }
+  if (endCallTimer)    { clearTimeout(endCallTimer);     endCallTimer    = null }
+}
+
+const triggerIceRestart = async () => {
+  if (!peerConnection) return
+  const now = Date.now()
+  if (now - lastRestartAt < 2000) return  // throttle
+  lastRestartAt = now
+  iceRestartCount += 1
+  console.log(`[WebRTC] 🔄 ICE restart attempt #${iceRestartCount}`)
+  try {
+    if (typeof peerConnection.restartIce === 'function') {
+      peerConnection.restartIce()
+    } else {
+      // fallback: createOffer with iceRestart
+      const offer = await peerConnection.createOffer({ iceRestart: true })
+      await peerConnection.setLocalDescription(offer)
+    }
+  } catch (err) {
+    console.warn('[WebRTC] ICE restart error:', err.message)
+  }
+}
 
 // ─── Permissions ──────────────────────────────────────────────────────────────
 export const requestCallPermissions = async (type = 'voice') => {
@@ -80,92 +128,70 @@ export const requestCallPermissions = async (type = 'voice') => {
 export const setSpeaker = async (forceSpeaker) => {
   if (Platform.OS === 'web') return
   try {
-    // expo-av দিয়ে OS-level audio routing
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
       staysActiveInBackground: true,
       shouldDuckAndroid: false,
-      playThroughEarpieceAndroid: !forceSpeaker, // true = earpiece, false = loud speaker
+      playThroughEarpieceAndroid: !forceSpeaker,
     })
-    // InCallManager থাকলে সেটাও call করো
-    if (InCallManager) {
-      InCallManager.setSpeakerphoneOn(forceSpeaker)
-    }
-    console.log(`[WebRTC] 🔊 Speaker ${forceSpeaker ? 'ON (loud)' : 'OFF (earpiece)'}`)
+    if (InCallManager) InCallManager.setSpeakerphoneOn(forceSpeaker)
+    console.log(`[WebRTC] 🔊 Speaker ${forceSpeaker ? 'ON' : 'OFF'}`)
   } catch (err) {
     console.warn('[WebRTC] setSpeaker error:', err)
   }
 }
 
-// ─── Start InCallManager ──────────────────────────────────────────────────────
 export const startAudioSession = async (media = 'audio') => {
   if (Platform.OS === 'web') return
   try {
-    // expo-av দিয়ে audio session configure করো
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
       staysActiveInBackground: true,
       shouldDuckAndroid: false,
-      playThroughEarpieceAndroid: media !== 'video', // video = speaker, audio = earpiece
+      playThroughEarpieceAndroid: media !== 'video',
     })
     if (InCallManager) {
       InCallManager.start({ media, ringback: '' })
-      if (media === 'video') {
-        InCallManager.setSpeakerphoneOn(true)
-      } else {
-        InCallManager.setSpeakerphoneOn(false)
-      }
+      InCallManager.setSpeakerphoneOn(media === 'video')
     }
-    console.log(`[WebRTC] 🎙️ Audio session started (${media})`)
   } catch (err) {
     console.warn('[WebRTC] startAudioSession error:', err)
   }
 }
 
-// ─── Stop InCallManager ───────────────────────────────────────────────────────
 export const stopAudioSession = () => {
   if (!InCallManager || Platform.OS === 'web') return
-  try {
-    InCallManager.stop()
-    console.log('[WebRTC] 🔇 Audio session stopped')
-  } catch (err) {
-    console.warn('[WebRTC] stopAudioSession error:', err)
-  }
+  try { InCallManager.stop() } catch (_) {}
 }
 
 // ─── Local stream ─────────────────────────────────────────────────────────────
-// ✅ ENHANCED: Videoenhancer থেকে improved constraints ব্যবহার করা হচ্ছে।
-// Device support না করলে fallback constraints এ retry করা হবে।
 export const initLocalStream = async (isVideo = false) => {
   try {
     const constraints = {
-  audio: {
-  echoCancellation:        true,
-  noiseSuppression:        true,
-  autoGainControl:         true,
-  sampleRate:              48000,
-  channelCount:            1,
-  // ✅ Google WebRTC advanced noise processing
-  googNoiseSuppression:    true,
-  googNoiseSuppression2:   true,   // 2nd-pass suppression
-  googEchoCancellation:    true,
-  googEchoCancellation2:   true,
-  googAutoGainControl:     true,
-  googAutoGainControl2:    true,
-  googHighpassFilter:      true,   // low-freq hum (fan, AC) কাটে
-  googTypingNoiseDetection:true,   // keyboard noise কাটে
-  googAudioMirroring:      false,
-},
+      audio: {
+        echoCancellation:        true,
+        noiseSuppression:        true,
+        autoGainControl:         true,
+        sampleRate:              48000,
+        channelCount:            1,
+        googNoiseSuppression:    true,
+        googNoiseSuppression2:   true,
+        googEchoCancellation:    true,
+        googEchoCancellation2:   true,
+        googAutoGainControl:     true,
+        googAutoGainControl2:    true,
+        googHighpassFilter:      true,
+        googTypingNoiseDetection:true,
+        googAudioMirroring:      false,
+      },
       video: isVideo ? getEnhancedVideoConstraints() : false,
     }
-
     localStream = await mediaDevices.getUserMedia(constraints)
-    console.log('[WebRTC] ✅ Local stream ready (enhanced)')
+    console.log('[WebRTC] ✅ Local stream ready')
     return localStream
   } catch (err) {
-    // Fallback: basic constraints দিয়ে retry
     console.warn('[WebRTC] Enhanced constraints failed, retrying with fallback:', err.message)
     try {
       const fallback = {
@@ -177,7 +203,6 @@ export const initLocalStream = async (isVideo = false) => {
         video: isVideo ? getFallbackVideoConstraints() : false,
       }
       localStream = await mediaDevices.getUserMedia(fallback)
-      console.log('[WebRTC] ✅ Local stream ready (fallback)')
       return localStream
     } catch (fallbackErr) {
       console.error('[WebRTC] Local stream error:', fallbackErr)
@@ -186,14 +211,17 @@ export const initLocalStream = async (isVideo = false) => {
   }
 }
 
-// ─── Create peer connection ────────────────────────────────────────────────────
-// ✅ ENHANCED: connected state এ boostVideoEncoding call করা হচ্ছে।
+// ─── Create peer connection ───────────────────────────────────────────────────
 export const createPeerConnection = (callbacks = {}) => {
-  const { onRemoteStream, onIceCandidate, onConnectionStateChange, onError } = callbacks
+  const { onRemoteStream, onIceCandidate, onConnectionStateChange, onError, onEndDueToFailure } = callbacks
+  onWatchdogEnd = onEndDueToFailure || null
 
   try {
     pendingCandidates = []
     remoteDescSet     = false
+    iceRestartCount   = 0
+    lastRestartAt     = 0
+    clearWatchdogs()
 
     peerConnection = new RTCPeerConnection(PC_CONFIG)
 
@@ -207,7 +235,6 @@ export const createPeerConnection = (callbacks = {}) => {
       if (event.streams && event.streams[0]) {
         remoteStream = event.streams[0]
         onRemoteStream?.(remoteStream)
-        console.log('[WebRTC] ✅ Remote stream received')
       }
     }
 
@@ -217,25 +244,61 @@ export const createPeerConnection = (callbacks = {}) => {
 
     peerConnection.onconnectionstatechange = () => {
       const state = peerConnection?.connectionState
-      console.log('[WebRTC] Connection state:', state)
+      console.log('[WebRTC] connectionState:', state)
       onConnectionStateChange?.(state)
 
-      // ✅ ENHANCEMENT: connected হওয়ার সাথে সাথে encoding boost
       if (state === 'connected') {
-        boostVideoEncoding(peerConnection)
-          .catch((e) => console.warn('[WebRTC] Post-connect boost failed:', e))
+        clearWatchdogs()
+        // ✅ Start adaptive bitrate monitoring + initial encoding
+        boostVideoEncoding(peerConnection, ENHANCE_CONFIG.startBitrateKbps).catch(() => {})
+        startAdaptiveBitrate(peerConnection)
+      }
+
+      if (state === 'disconnected') {
+        // 8 sec waiting — তারপর ICE restart
+        if (!iceRestartTimer) {
+          iceRestartTimer = setTimeout(() => { triggerIceRestart() }, 4000)
+        }
+        // 25 sec পরও recover না হলে call end
+        if (!endCallTimer) {
+          endCallTimer = setTimeout(() => {
+            console.warn('[WebRTC] 💀 Call disconnected too long — ending')
+            onWatchdogEnd?.()
+          }, 25000)
+        }
       }
 
       if (state === 'failed') {
-        try { peerConnection.restartIce?.() } catch (_) {}
+        // immediate restart attempt
+        triggerIceRestart()
+        if (!endCallTimer) {
+          endCallTimer = setTimeout(() => {
+            console.warn('[WebRTC] 💀 Call failed — ending')
+            onWatchdogEnd?.()
+          }, 15000)
+        }
+      }
+
+      if (state === 'closed') {
+        clearWatchdogs()
+        stopAdaptiveBitrate()
       }
     }
 
     peerConnection.oniceconnectionstatechange = () => {
       const state = peerConnection?.iceConnectionState
       console.log('[WebRTC] ICE state:', state)
+
+      if (state === 'connected' || state === 'completed') {
+        clearWatchdogs()
+      }
+      if (state === 'disconnected') {
+        if (!iceRestartTimer) {
+          iceRestartTimer = setTimeout(() => { triggerIceRestart() }, 4000)
+        }
+      }
       if (state === 'failed') {
-        try { peerConnection.restartIce?.() } catch (_) {}
+        triggerIceRestart()
       }
     }
 
@@ -249,32 +312,28 @@ export const createPeerConnection = (callbacks = {}) => {
 }
 
 // ─── Offer ────────────────────────────────────────────────────────────────────
-// ✅ ENHANCED: SDP এ bitrate boost inject করা হচ্ছে।
 export const createOffer = async () => {
   if (!peerConnection) throw new Error('No peer connection')
   const offer = await peerConnection.createOffer({
     offerToReceiveAudio: true,
     offerToReceiveVideo: true,
   })
-  // SDP bitrate boost
-const boostedSdp   = boostSdpBitrate(offer.sdp)
-const boostedOffer = { ...offer, sdp: boostedSdp }
-
+  // SDP optimize: video bitrate cap + opus voice optimize
+  let sdp = boostSdpBitrate(offer.sdp, ENHANCE_CONFIG.startBitrateKbps)
+  sdp = optimizeAudioSdp(sdp)
+  const boostedOffer = { ...offer, sdp }
   await peerConnection.setLocalDescription(boostedOffer)
-  console.log('[WebRTC] ✅ Offer created (SDP boosted)')
   return boostedOffer
 }
 
 // ─── Answer ───────────────────────────────────────────────────────────────────
-// ✅ ENHANCED: SDP এ bitrate boost inject করা হচ্ছে।
 export const createAnswer = async () => {
   if (!peerConnection) throw new Error('No peer connection')
   const answer = await peerConnection.createAnswer()
-  // SDP bitrate boost
-const boostedSdp    = boostSdpBitrate(answer.sdp)
-const boostedAnswer = { ...answer, sdp: boostedSdp }
+  let sdp = boostSdpBitrate(answer.sdp, ENHANCE_CONFIG.startBitrateKbps)
+  sdp = optimizeAudioSdp(sdp)
+  const boostedAnswer = { ...answer, sdp }
   await peerConnection.setLocalDescription(boostedAnswer)
-  console.log('[WebRTC] ✅ Answer created (SDP boosted)')
   return boostedAnswer
 }
 
@@ -283,10 +342,7 @@ export const setRemoteDescription = async (description) => {
   if (!peerConnection) throw new Error('No peer connection')
   await peerConnection.setRemoteDescription(new RTCSessionDescription(description))
   remoteDescSet = true
-  console.log('[WebRTC] ✅ Remote description set')
-
   if (pendingCandidates.length > 0) {
-    console.log(`[WebRTC] Flushing ${pendingCandidates.length} buffered ICE candidates`)
     for (const c of pendingCandidates) {
       try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)) }
       catch (err) { console.warn('[WebRTC] flush ICE err:', err.message) }
@@ -322,7 +378,6 @@ export const switchCamera = () => {
   if (localStream) localStream.getVideoTracks().forEach((t) => t._switchCamera())
 }
 
-// ─── Manual boost (বাইরে থেকে call করার জন্য) ───────────────────────────────
 export const boostCurrentCall = () => boostVideoEncoding(peerConnection)
 
 export const getLocalStream    = () => localStream
@@ -333,6 +388,8 @@ export const isRemoteDescSet   = () => remoteDescSet
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 export const cleanup = () => {
   try {
+    clearWatchdogs()
+    stopAdaptiveBitrate()
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop())
       localStream = null
@@ -344,6 +401,7 @@ export const cleanup = () => {
     remoteStream      = null
     pendingCandidates = []
     remoteDescSet     = false
+    iceRestartCount   = 0
     stopAudioSession()
     console.log('[WebRTC] ✅ Cleanup complete')
   } catch (err) {
