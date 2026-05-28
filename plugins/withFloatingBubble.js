@@ -1,10 +1,8 @@
-
 const {
     withAndroidManifest,
     withMainApplication,
     withMainActivity,
     withDangerousMod,
-    AndroidConfig,
 } = require('@expo/config-plugins')
 const fs = require('fs')
 const path = require('path')
@@ -12,9 +10,6 @@ const path = require('path')
 const PKG = 'com.kotha.floatingbubble'
 const PKG_PATH = PKG.replace(/\./g, '/')
 
-/* ───────────────────────────── Java sources ───────────────────────────── */
-
-// FloatingBubbleModule.java — Native bridge + PiP API
 const FLOATING_BUBBLE_MODULE = `package ${PKG};
 
 import android.app.Activity;
@@ -51,8 +46,6 @@ public class FloatingBubbleModule extends ReactContextBaseJavaModule {
         } catch (Exception ignored) {}
     }
 
-    /* ───── Overlay permission ───── */
-
     @ReactMethod
     public void hasOverlayPermission(Promise promise) {
         try {
@@ -78,11 +71,6 @@ public class FloatingBubbleModule extends ReactContextBaseJavaModule {
             }
         } catch (Exception ignored) {}
     }
-
-    /* ───── Bubble service ─────
-       NOTE: We ALWAYS start the foreground service (so the call stays alive
-       in background even without overlay permission). The overlay UI itself
-       is only rendered inside the service if canDrawOverlays() is true. */
 
     @ReactMethod
     public void show(ReadableMap config) {
@@ -110,9 +98,6 @@ public class FloatingBubbleModule extends ReactContextBaseJavaModule {
             reactContext.stopService(intent);
         } catch (Exception ignored) {}
     }
-
-    /* ───── Picture-in-Picture (for video calls) ─────
-       Returns true if the activity successfully entered PiP. */
 
     @ReactMethod
     public void enterPictureInPicture(boolean isVideo, Promise promise) {
@@ -148,7 +133,6 @@ public class FloatingBubbleModule extends ReactContextBaseJavaModule {
 }
 `
 
-// FloatingBubbleService.java — Foreground service + overlay UI
 const FLOATING_BUBBLE_SERVICE = `package ${PKG};
 
 import android.app.Notification;
@@ -185,6 +169,7 @@ public class FloatingBubbleService extends Service {
     private View bubbleView;
     private WindowManager.LayoutParams params;
     private String currentCallType = "voice";
+    private boolean foregroundStarted = false;
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -192,8 +177,8 @@ public class FloatingBubbleService extends Service {
     public void onCreate() {
         super.onCreate();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-        // Start as foreground IMMEDIATELY (must be within 5s of service creation)
-        startInForeground("voice");
+        // NOTE: Do NOT call startForeground here.
+        // startForeground MUST be called in onStartCommand within 5 seconds.
     }
 
     private void startInForeground(String callType) {
@@ -239,11 +224,9 @@ public class FloatingBubbleService extends Service {
                     startForeground(NOTIF_ID, n);
                 }
             } catch (Exception e) {
-                // Fallback without type
                 try { startForeground(NOTIF_ID, n); } catch (Exception ignored) {}
             }
         } else {
-            // Pre-O: simple startForeground
             Notification n = new Notification.Builder(this)
                 .setContentTitle("Call in progress")
                 .setSmallIcon(android.R.drawable.ic_menu_call)
@@ -251,24 +234,24 @@ public class FloatingBubbleService extends Service {
                 .build();
             startForeground(NOTIF_ID, n);
         }
+        foregroundStarted = true;
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String peerName = intent != null && intent.hasExtra("peerName")
-            ? intent.getStringExtra("peerName") : "Calling";
         String callType = intent != null && intent.hasExtra("callType")
             ? intent.getStringExtra("callType") : "voice";
+        String peerName = intent != null && intent.hasExtra("peerName")
+            ? intent.getStringExtra("peerName") : "Calling";
         long startedAt = intent != null && intent.hasExtra("startedAt")
             ? intent.getLongExtra("startedAt", 0) : 0;
 
-        // Upgrade foreground service type if call type changed (e.g. voice -> video)
-        if (!callType.equals(currentCallType)) {
+        // CRITICAL: startForeground must be called immediately in onStartCommand
+        if (!foregroundStarted || !callType.equals(currentCallType)) {
             currentCallType = callType;
             startInForeground(callType);
         }
 
-        // Only attach overlay if permission granted
         boolean canDraw = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                 || Settings.canDrawOverlays(this);
         if (canDraw) {
@@ -298,7 +281,6 @@ public class FloatingBubbleService extends Service {
         container.setOrientation(LinearLayout.HORIZONTAL);
         container.setGravity(Gravity.CENTER_VERTICAL);
 
-        // Icon circle (call type)
         FrameLayout iconWrap = new FrameLayout(this);
         LinearLayout.LayoutParams iw = new LinearLayout.LayoutParams(dp(40), dp(40));
         iw.setMargins(0, 0, dp(10), 0);
@@ -306,28 +288,20 @@ public class FloatingBubbleService extends Service {
         android.graphics.drawable.GradientDrawable iconBg = new android.graphics.drawable.GradientDrawable();
         iconBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
         boolean isVideo = "video".equals(callType);
-        iconBg.setColor(isVideo
-            ? Color.parseColor("#334F8EF7")
-            : Color.parseColor("#3300E5A0"));
+        iconBg.setColor(isVideo ? Color.parseColor("#334F8EF7") : Color.parseColor("#3300E5A0"));
         iconWrap.setBackground(iconBg);
 
         ImageView ic = new ImageView(this);
-        ic.setImageResource(isVideo
-            ? android.R.drawable.ic_menu_camera
-            : android.R.drawable.ic_menu_call);
-        ic.setColorFilter(isVideo
-            ? Color.parseColor("#4F8EF7")
-            : Color.parseColor("#00E5A0"));
+        ic.setImageResource(isVideo ? android.R.drawable.ic_menu_camera : android.R.drawable.ic_menu_call);
+        ic.setColorFilter(isVideo ? Color.parseColor("#4F8EF7") : Color.parseColor("#00E5A0"));
         FrameLayout.LayoutParams icLp = new FrameLayout.LayoutParams(dp(22), dp(22));
         icLp.gravity = Gravity.CENTER;
         ic.setLayoutParams(icLp);
         iconWrap.addView(ic);
 
-        // Text column
         LinearLayout textCol = new LinearLayout(this);
         textCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0,
-            ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         textCol.setLayoutParams(tcLp);
 
         TextView name = new TextView(this);
@@ -339,9 +313,7 @@ public class FloatingBubbleService extends Service {
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
 
         Chronometer chrono = new Chronometer(this);
-        chrono.setTextColor(isVideo
-            ? Color.parseColor("#4F8EF7")
-            : Color.parseColor("#00E5A0"));
+        chrono.setTextColor(isVideo ? Color.parseColor("#4F8EF7") : Color.parseColor("#00E5A0"));
         chrono.setTextSize(11);
         if (startedAt > 0) {
             long base = SystemClock.elapsedRealtime() - (System.currentTimeMillis() - startedAt);
@@ -354,7 +326,6 @@ public class FloatingBubbleService extends Service {
         textCol.addView(name);
         textCol.addView(chrono);
 
-        // End-call button
         final FrameLayout endBtn = new FrameLayout(this);
         LinearLayout.LayoutParams ebLp = new LinearLayout.LayoutParams(dp(36), dp(36));
         ebLp.setMargins(dp(10), 0, 0, 0);
@@ -383,7 +354,6 @@ public class FloatingBubbleService extends Service {
         container.addView(endBtn);
         root.addView(container);
 
-        // Tap (not drag, not end-btn) → reopen app
         root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 FloatingBubbleModule.emit("BubbleTapped", null);
@@ -414,7 +384,6 @@ public class FloatingBubbleService extends Service {
         params.x = dp(12);
         params.y = dp(80);
 
-        // Touch: drag-or-tap (end button is its own clickable child, won't drag the bubble)
         root.setOnTouchListener(new View.OnTouchListener() {
             int initX, initY;
             float touchX, touchY;
@@ -467,7 +436,6 @@ public class FloatingBubbleService extends Service {
 }
 `
 
-// FloatingBubblePackage.java — registers the module
 const FLOATING_BUBBLE_PACKAGE = `package ${PKG};
 
 import androidx.annotation.NonNull;
@@ -497,9 +465,6 @@ public class FloatingBubblePackage implements ReactPackage {
 }
 `
 
-/* ───────────────────────────── Plugins ───────────────────────────── */
-
-// (1) Write Java source files
 const withJavaSources = (config) =>
     withDangerousMod(config, [
         'android',
@@ -514,19 +479,16 @@ const withJavaSources = (config) =>
         },
     ])
 
-// (2) AndroidManifest: permissions + service + PiP attrs on MainActivity
 const withManifest = (config) =>
     withAndroidManifest(config, (cfg) => {
         const manifest = cfg.modResults.manifest
         manifest['uses-permission'] = manifest['uses-permission'] || []
 
         const addPerm = (p) => {
-            if (!manifest['uses-permission'].find(
-                (x) => x.$?.['android:name'] === p)) {
+            if (!manifest['uses-permission'].find((x) => x.$?.['android:name'] === p)) {
                 manifest['uses-permission'].push({ $: { 'android:name': p } })
             }
         }
-        // Foreground-service permissions for WebRTC call survival
         addPerm('android.permission.FOREGROUND_SERVICE')
         addPerm('android.permission.FOREGROUND_SERVICE_MICROPHONE')
         addPerm('android.permission.FOREGROUND_SERVICE_CAMERA')
@@ -536,11 +498,9 @@ const withManifest = (config) =>
         const app = manifest.application?.[0]
         if (!app) return cfg
 
-        // Service
         app.service = app.service || []
         const svcName = `${PKG}.FloatingBubbleService`
-        const existsSvc = app.service.find(
-            (s) => s.$['android:name'] === svcName)
+        const existsSvc = app.service.find((s) => s.$['android:name'] === svcName)
         if (!existsSvc) {
             app.service.push({
                 $: {
@@ -553,7 +513,6 @@ const withManifest = (config) =>
             existsSvc.$['android:foregroundServiceType'] = 'microphone|camera'
         }
 
-        // MainActivity: enable PiP + resizeable
         const activities = app.activity || []
         const main = activities.find(
             (a) => a.$['android:name'] === '.MainActivity'
@@ -561,7 +520,6 @@ const withManifest = (config) =>
         if (main) {
             main.$['android:supportsPictureInPicture'] = 'true'
             main.$['android:resizeableActivity'] = 'true'
-            // Ensure configChanges includes screen size so PiP doesn't recreate the activity
             const cur = main.$['android:configChanges'] || ''
             const needed = ['screenSize', 'smallestScreenSize', 'screenLayout', 'orientation', 'keyboardHidden']
             const parts = new Set(cur.split('|').filter(Boolean))
@@ -571,57 +529,50 @@ const withManifest = (config) =>
         return cfg
     })
 
-// (3) Register FloatingBubblePackage in MainApplication (Kotlin or Java)
 const withRegisterPackage = (config) =>
     withMainApplication(config, (cfg) => {
         let src = cfg.modResults.contents
-        const language = cfg.modResults.language // 'kt' | 'java'
+        const language = cfg.modResults.language
 
         if (language === 'kt') {
             const importLine = `import ${PKG}.FloatingBubblePackage`
             if (!src.includes(importLine)) {
                 src = src.replace(
-                    /(package [^n]+n)/,
-                    `$1n${importLine}n`
+                    /(package [^\n]+\n)/,
+                    `$1\n${importLine}\n`
                 )
             }
 
             if (!src.includes('FloatingBubblePackage()')) {
-                // Case A: val packages = PackageList(this).packages  (block-body form)
-                if (/vals+packagess*=s*PackageList(this).packages/.test(src)) {
+                if (/val\s+packages\s*=\s*PackageList\(this\)\.packages/.test(src)) {
                     src = src.replace(
-                        /(vals+packagess*=s*PackageList(this).packages[^n]*n)/,
-                        `$1            packages.add(FloatingBubblePackage())n`
+                        /(val\s+packages\s*=\s*PackageList\(this\)\.packages[^\n]*\n)/,
+                        `$1            packages.add(FloatingBubblePackage())\n`
                     )
-                }
-                // Case B: expression body  =  PackageList(this).packages.apply { ... }
-                else if (/PackageList(this).packages.applys*{/.test(src)) {
+                } else if (/PackageList\(this\)\.packages\.apply\s*\{/.test(src)) {
                     src = src.replace(
-                        /(PackageList(this).packages.applys*{[^n]*n)/,
-                        `$1                add(FloatingBubblePackage())n`
+                        /(PackageList\(this\)\.packages\.apply\s*\{[^\n]*\n)/,
+                        `$1                add(FloatingBubblePackage())\n`
                     )
-                }
-                // Case C: bare PackageList(this).packages (no apply, no val)
-                else if (/PackageList(this).packages(?!.)/.test(src)) {
+                } else if (/PackageList\(this\)\.packages(?!\.)/.test(src)) {
                     src = src.replace(
-                        /PackageList(this).packages(?!.)/,
+                        /PackageList\(this\)\.packages(?!\.)/,
                         `PackageList(this).packages.apply { add(FloatingBubblePackage()) }`
                     )
                 }
             }
         } else {
-            // Java
             const importLine = `import ${PKG}.FloatingBubblePackage;`
             if (!src.includes(importLine)) {
                 src = src.replace(
-                    /(package [^n;]+;[rn]+)/,
-                    `$1n${importLine}n`
+                    /(package [^\n;]+;\r?\n)/,
+                    `$1\n${importLine}\n`
                 )
             }
             if (!src.includes('new FloatingBubblePackage()')) {
                 src = src.replace(
-                    /(List<ReactPackage>s+packagess*=s*news+PackageList(this).getPackages()s*;)/,
-                    `$1n      packages.add(new FloatingBubblePackage());`
+                    /(List<ReactPackage>\s+packages\s*=\s*new\s+PackageList\(this\)\.getPackages\(\)\s*;)/,
+                    `$1\n      packages.add(new FloatingBubblePackage());`
                 )
             }
         }
@@ -630,11 +581,10 @@ const withRegisterPackage = (config) =>
         return cfg
     })
 
-// (4) MainActivity: emit PiP-mode changes to JS so call screen can adapt UI
 const withMainActivityPiPHook = (config) =>
     withMainActivity(config, (cfg) => {
         let src = cfg.modResults.contents
-        const language = cfg.modResults.language // 'kt' | 'java'
+        const language = cfg.modResults.language
 
         if (language === 'kt') {
             const importLines = [
@@ -644,25 +594,22 @@ const withMainActivityPiPHook = (config) =>
             importLines.forEach((imp) => {
                 if (!src.includes(imp)) {
                     src = src.replace(
-                        /(package [^n]+n)/,
-                        `$1n${imp}n`
+                        /(package [^\n]+\n)/,
+                        `$1\n${imp}\n`
                     )
                 }
             })
 
             if (!src.includes('onPictureInPictureModeChanged')) {
-                // Inject override inside the class (right before final closing brace)
                 const hook = `
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     FloatingBubbleModule.emit("PiPModeChanged", isInPictureInPictureMode)
   }
 `
-                // Inject before the last "}" of the class
-                src = src.replace(/n}s*$/m, `${hook}n}n`)
+                src = src.replace(/\n}\s*$/m, `${hook}\n}\n`)
             }
         } else {
-            // Java
             const importLines = [
                 'import android.content.res.Configuration;',
                 `import ${PKG}.FloatingBubbleModule;`,
@@ -670,8 +617,8 @@ const withMainActivityPiPHook = (config) =>
             importLines.forEach((imp) => {
                 if (!src.includes(imp)) {
                     src = src.replace(
-                        /(package [^n;]+;[rn]+)/,
-                        `$1n${imp}n`
+                        /(package [^\n;]+;\r?\n)/,
+                        `$1\n${imp}\n`
                     )
                 }
             })
@@ -684,7 +631,7 @@ const withMainActivityPiPHook = (config) =>
     FloatingBubbleModule.emit("PiPModeChanged", isInPictureInPictureMode);
   }
 `
-                src = src.replace(/n}s*$/m, `${hook}n}n`)
+                src = src.replace(/\n}\s*$/m, `${hook}\n}\n`)
             }
         }
 
