@@ -1,4 +1,3 @@
-
 import { Audio } from 'expo-av'
 import { PermissionsAndroid, Platform } from 'react-native'
 import {
@@ -390,14 +389,46 @@ export const cleanup = () => {
   try {
     clearWatchdogs()
     stopAdaptiveBitrate()
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop())
-      localStream = null
-    }
+
+    // ✅ FIX: Camera2 race condition এড়াতে PeerConnection আগে close করো।
+    // PC close হলে WebRTC নিজেই tracks detach করে Camera2Session কে সিগনাল দেয়।
+    // তারপর একটু wait করে track.stop() call করলে pending Camera2 async
+    // callbacks (onConfigured ইত্যাদি) শেষ হওয়ার সুযোগ পায়।
+    // এতে "Session has been closed; further changes are illegal" crash হয় না।
+
     if (peerConnection) {
+      try {
+        // সব senders এর track null করো — PC close এর আগে
+        peerConnection.getSenders?.()?.forEach?.((sender) => {
+          try { sender.replaceTrack(null) } catch (_) {}
+        })
+      } catch (_) {}
       try { peerConnection.close() } catch (_) {}
       peerConnection = null
     }
+
+    // PC close করার পর Camera2 এর async callbacks drain হতে ছোট delay দাও
+    const streamToStop = localStream
+    localStream = null   // reference আগেই null করো যাতে double-stop না হয়
+
+    if (streamToStop) {
+      // Video tracks আলাদাভাবে একটু পরে stop করো (Camera2 callback drain)
+      const videoTracks = streamToStop.getVideoTracks?.() ?? []
+      const audioTracks = streamToStop.getAudioTracks?.() ?? []
+
+      // Audio tracks সাথে সাথে stop করা safe
+      audioTracks.forEach((t) => { try { t.stop() } catch (_) {} })
+
+      // Video tracks: 150ms delay দাও যাতে Camera2Session এর pending
+      // onConfigured / setRepeatingRequest callbacks complete হওয়ার আগেই
+      // session close না হয়
+      if (videoTracks.length > 0) {
+        setTimeout(() => {
+          videoTracks.forEach((t) => { try { t.stop() } catch (_) {} })
+        }, 150)
+      }
+    }
+
     remoteStream      = null
     pendingCandidates = []
     remoteDescSet     = false

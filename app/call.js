@@ -1,10 +1,13 @@
-import { useLocalSearchParams, useRouter } from 'expo-router'
+
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Animated,
   AppState,
+  BackHandler,
   Dimensions,
   Image,
+  NativeModules,
   PanResponder,
   Platform,
   SafeAreaView,
@@ -14,6 +17,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
+
+// ── KeepScreenOn — call এ screen dim হবে না ───────────────────────────────
+const KeepScreenOn = Platform.OS === 'android' ? NativeModules.KeepScreenOn : null
 import { useCall } from '../context/CallContext'
 import { FloatingBubble } from '../services/FloatingBubble'
 import { getSocket } from '../services/socket'
@@ -199,7 +205,7 @@ function CtrlBtn({ icon, label, onPress, active = false, danger = false }) {
 export default function CallScreen() {
   const params = useLocalSearchParams()
   const router = useRouter()
-  const { dispatch } = useCall()
+  const { dispatch, startCallTimer, stopCallTimer, setCallScreenFocused } = useCall()
 
   const {
     callId, roomId, type = 'voice',
@@ -221,7 +227,6 @@ export default function CallScreen() {
   const [netWeak, setNetWeak] = useState(false)
   const [ctrlShown, setCtrlShown] = useState(true)
   const [swapped, setSwapped] = useState(false)
-  // ✅ NEW — true when Android Picture-in-Picture mode is active
   const [inPiP, setInPiP] = useState(false)
 
   const ctrlOpacity = useRef(new Animated.Value(1)).current
@@ -241,6 +246,10 @@ export default function CallScreen() {
   const pipInitY = Platform.OS === 'android' ? 90 : 110
   const pipPan = useRef(new Animated.ValueXY({ x: pipInitX, y: pipInitY })).current
   const pipPanOffset = useRef({ x: pipInitX, y: pipInitY })
+
+  const callEndedRef = useRef(false)
+  const screenFocusedRef = useRef(true)
+  const bubbleOperationInProgress = useRef(false)
 
   const timerRef = useRef(null)
   const mountedRef = useRef(true)
@@ -363,102 +372,237 @@ export default function CallScreen() {
     }
   }, [connected, isVideo])
 
-const handleEnd = useCallback((remote = false) => {
-  try { FloatingBubble.hide() } catch (_) { }
-  if (!remote) getSocket()?.emit('call:end', { callId })
-  dispatch({ type: 'RESET' })
-  try {
-    if (router.canGoBack()) router.back()
-    else router.replace('/(tab)/calls')
-  } catch (_) { }
-}, [callId, dispatch, router])
+  const handleEnd = useCallback((remote = false) => {
+    if (callEndedRef.current) return
+    callEndedRef.current = true
 
-  /* ─────────────────────────────────────────────────────────────────────────
-     ✅ FLOATING BUBBLE + PICTURE-IN-PICTURE  (the big fix)
+    try {
+      if (Platform.OS === 'android' && FloatingBubble.isSupported) {
+        FloatingBubble.hide()
+      }
+    } catch (e) {
+      console.warn('[Call] FloatingBubble.hide error:', e?.message)
+    }
 
-     Strategy:
-       • VIDEO call → enter Android Picture-in-Picture mode when going to
-         background. The whole call screen shrinks into a floating window
-         that continues to render REAL live remote + local video (just like
-         WhatsApp / Telegram / Meet). We hide decorations via `inPiP` state.
+    try { KeepScreenOn?.disable() } catch (e) {
+      console.warn('[Call] KeepScreenOn.disable error:', e?.message)
+    }
 
-       • VOICE call → show a small overlay bubble with peer name, duration
-         and an end-call button (no live video to show anyway).
+    if (!remote) {
+      const socket = getSocket()
+      if (socket?.connected) {
+        try { socket.emit('call:end', { callId }) } catch (_) { }
+      }
+    }
 
-       • In BOTH cases the native FloatingBubbleService runs in foreground
-         with type=microphone(+camera). This is what keeps the WebRTC mic
-         and camera alive in background on Android 14+ — the previous
-         "phoneCall" service type silently revoked mic/camera, which was
-         exactly why your call was dying the moment the app went to bg.
-     ───────────────────────────────────────────────────────────────────── */
+    dispatch({ type: 'RESET' })
+
+    setTimeout(() => {
+      if (!mountedRef.current) return
+      try {
+        router.replace('/(tab)')
+      } catch (e) {
+        console.warn('[Call] Navigation error:', e?.message)
+        try { router.replace('/(tab)/index') } catch (__) { }
+      }
+    }, 100)
+  }, [callId, dispatch, router])
+
+  const showBubbleOrPiP = useCallback(async () => {
+    if (Platform.OS !== 'android' || !FloatingBubble.isSupported) return
+    if (callEndedRef.current) return
+    if (bubbleOperationInProgress.current) return
+
+    bubbleOperationInProgress.current = true
+
+    try {
+      if (isVideo && connectedRef.current) {
+        const pipOk = await FloatingBubble.enterPiP(true).catch(() => false)
+
+        if (!pipOk && !callEndedRef.current) {
+          await FloatingBubble.show({
+            peerName: String(peerName || ''),
+            callType: 'video',
+            startedAt: callStartedAtRef.current || Date.now(),
+            avatar: String(peerAvatar || ''),
+          }).catch(() => { })
+        }
+      } else {
+        await FloatingBubble.show({
+          peerName: String(peerName || ''),
+          callType: isVideo ? 'video' : 'voice',
+          startedAt: connectedRef.current ? (callStartedAtRef.current || Date.now()) : 0,
+          avatar: String(peerAvatar || ''),
+        }).catch(() => { })
+      }
+    } catch (e) {
+      console.warn('[Call] showBubbleOrPiP error:', e?.message)
+    } finally {
+      setTimeout(() => {
+        bubbleOperationInProgress.current = false
+      }, 500)
+    }
+  }, [isVideo, peerName, peerAvatar])
+
+  useFocusEffect(
+    useCallback(() => {
+      screenFocusedRef.current = true
+      setCallScreenFocused(true)
+
+      if (Platform.OS === 'android' && FloatingBubble.isSupported) {
+        try {
+          FloatingBubble.hide()
+        } catch (e) {
+          console.warn('[Call] useFocusEffect hide error:', e?.message)
+        }
+      }
+
+      return () => {
+        screenFocusedRef.current = false
+        setCallScreenFocused(false)
+
+        if (!callEndedRef.current && !bubbleOperationInProgress.current) {
+          if (!isVideo || !connectedRef.current) {
+            setTimeout(() => {
+              if (!callEndedRef.current && !screenFocusedRef.current && !bubbleOperationInProgress.current) {
+                showBubbleOrPiP()
+              }
+            }, 300)
+          }
+        }
+      }
+    }, [showBubbleOrPiP, isVideo])
+  )
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (callEndedRef.current) return false
+
+      if (isVideo && connectedRef.current && FloatingBubble.isSupported) {
+        bubbleOperationInProgress.current = true
+
+        FloatingBubble.enterPiP(true)
+          .then((pipOk) => {
+            if (pipOk) {
+              try {
+                router.navigate('/(tab)')
+              } catch (e) {
+                console.warn('[Call] Navigate after PiP error:', e?.message)
+                try { router.navigate('/(tab)/index') } catch (__) { }
+              }
+            } else {
+              try {
+                router.navigate('/(tab)')
+              } catch (e) {
+                try { router.navigate('/(tab)/index') } catch (__) { }
+              }
+            }
+          })
+          .catch(() => {
+            try {
+              router.navigate('/(tab)')
+            } catch (e) {
+              try { router.navigate('/(tab)/index') } catch (__) { }
+            }
+          })
+          .finally(() => {
+            setTimeout(() => {
+              bubbleOperationInProgress.current = false
+            }, 500)
+          })
+
+        return true
+      }
+
+      try {
+        router.navigate('/(tab)')
+        return true
+      } catch (e) {
+        console.warn('[Call] BackHandler navigate error:', e?.message)
+        try {
+          router.navigate('/(tab)/index')
+          return true
+        } catch (e2) {
+          console.warn('[Call] BackHandler fallback error:', e2?.message)
+          return false
+        }
+      }
+    })
+
+    return () => {
+      try { sub.remove() } catch (_) { }
+    }
+  }, [router, isVideo])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
     if (!FloatingBubble.isSupported) return
 
-    // Ask for overlay permission once. (Used as fallback for video and
-    // always for voice.) Non-blocking.
     FloatingBubble.hasPermission().then((has) => {
-      if (!has) FloatingBubble.requestPermission()
-    })
+      if (!has) FloatingBubble.requestPermission().catch(() => { })
+    }).catch(() => { })
 
-    // PiP-mode listener — emitted from MainActivity#onPictureInPictureModeChanged
     const offPiP = FloatingBubble.onPiPModeChanged((isInPiP) => {
       if (!mountedRef.current) return
       setInPiP(!!isInPiP)
     })
 
-    const handleBackground = async () => {
-      if (!mountedRef.current) return
-      // Always start the foreground service first — this keeps mic/camera
-      // alive even if PiP fails or overlay permission is denied.
-      FloatingBubble.show({
-        peerName: String(peerName || ''),
-        callType: isVideo ? 'video' : 'voice',
-        startedAt: callStartedAtRef.current || Date.now(),
-        avatar: String(peerAvatar || ''),
-      })
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (!mountedRef.current || callEndedRef.current) return
 
-      if (isVideo) {
-        // Try PiP — best UX: real live video preview floats on screen.
-        const ok = await FloatingBubble.enterPiP(true)
-        if (ok) {
-          // PiP succeeded; hide the overlay bubble so it doesn't double up.
-          FloatingBubble.hide()
-        }
-        // If PiP failed (e.g. permission denied, OS limit), the overlay
-        // bubble we already started stays visible.
-      }
-    }
-
-    const sub = AppState.addEventListener('change', (next) => {
-      if (!mountedRef.current) return
-      if (next === 'background' || next === 'inactive') {
-        handleBackground()
-      } else if (next === 'active') {
-        // Back in foreground — hide overlay bubble (PiP mode will dismiss
-        // itself automatically when user taps it).
-        FloatingBubble.hide()
+      if (nextState === 'background' || nextState === 'inactive') {
+        showBubbleOrPiP()
+      } else if (nextState === 'active') {
+        try { FloatingBubble.hide() } catch (_) { }
       }
     })
 
-    // Bubble events
     const offTap = FloatingBubble.onTapped(() => {
-      // bubble tapped → app already brought to front by native side, just hide bubble
-      FloatingBubble.hide()
+      try { FloatingBubble.hide() } catch (_) { }
+
+      if (!screenFocusedRef.current) {
+        try {
+          router.navigate({
+            pathname: '/call',
+            params: { callId, roomId, type, peerName, peerAvatar, outgoing },
+          })
+        } catch (e) {
+          console.warn('[Call] Bubble tap navigate error:', e?.message)
+        }
+      }
     })
+
     const offEnd = FloatingBubble.onEndCallPressed(() => {
       handleEnd(false)
+    })
+
+    const offMute = FloatingBubble.onMutePressed(() => {
+      const newMuted = !muted
+      setM(newMuted)
+      setMuted(newMuted)
+      try { FloatingBubble.updateMuteState(newMuted) } catch (_) { }
+    })
+
+    const offSpeaker = FloatingBubble.onSpeakerPressed(() => {
+      const newSpeaker = !speakerOnRef.current
+      setSpeakerOn(newSpeaker)
+      speakerOnRef.current = newSpeaker
+      setSpeaker(newSpeaker)
+      try { FloatingBubble.updateSpeakerState(newSpeaker) } catch (_) { }
     })
 
     return () => {
       try { sub.remove() } catch (_) { }
       try { offTap() } catch (_) { }
       try { offEnd() } catch (_) { }
+      try { offMute() } catch (_) { }
+      try { offSpeaker() } catch (_) { }
       try { offPiP() } catch (_) { }
       try { FloatingBubble.hide() } catch (_) { }
     }
-  }, [peerName, peerAvatar, isVideo, handleEnd])
+  }, [showBubbleOrPiP, handleEnd, muted, callId, roomId, type, peerName, peerAvatar, outgoing, router])
 
   useEffect(() => {
     mountedRef.current = true
@@ -534,9 +678,11 @@ const handleEnd = useCallback((remote = false) => {
             setRemoteStreamState(rs)
             setConnected(true)
             setNetWeak(false)
+            try { KeepScreenOn?.enable() } catch (_) { }
             Animated.timing(remoteOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start()
             if (isVideo) scheduleHide()
             if (!timerRef.current) timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
+            startCallTimer(callStartedAtRef.current)
             setTimeout(() => { setSpeaker(speakerOnRef.current) }, 500)
           },
           onIceCandidate: (candidate) => { socket?.emit('webrtc:ice-candidate', { callId, candidate }) },
@@ -571,6 +717,8 @@ const handleEnd = useCallback((remote = false) => {
       mountedRef.current = false
       stopRingback().catch(() => { })
       try { FloatingBubble.hide() } catch (_) { }
+      try { KeepScreenOn?.disable() } catch (_) { }
+      stopCallTimer()
       const s = getSocket()
       s?.off('webrtc:offer', onOffer)
       s?.off('webrtc:answer', onAnswer)
@@ -648,9 +796,6 @@ const handleEnd = useCallback((remote = false) => {
   const renderVideoLayers = () => {
     if (!isVideo || !connected) return null
 
-    // ✅ While in Android PiP mode, render ONLY the remote video full-screen
-    // so the tiny floating window shows the actual call (no UI chrome / no
-    // draggable pip-thumbnail overlapping it).
     if (inPiP) {
       return remoteStreamState
         ? renderFullscreen(remoteStreamState, false)
@@ -690,9 +835,6 @@ const handleEnd = useCallback((remote = false) => {
     }
   }
 
-  // ✅ In PiP, render a minimal video-only view (no top bar, no controls,
-  // no avatar pulse — just the video so it looks clean inside the small
-  // floating system window).
   if (inPiP && isVideo) {
     return (
       <View style={s.root}>
@@ -717,11 +859,58 @@ const handleEnd = useCallback((remote = false) => {
 
       <SafeAreaView style={s.topSafe}>
         <Animated.View style={[s.topBar, { opacity: topBarOp, transform: [{ translateY: topBarY }] }]}>
-          <View style={[s.typePill, { borderColor: accentColor + '40', backgroundColor: accentColor + '15' }]}>
-            <View style={[s.typeDot, { backgroundColor: accentColor }]} />
-            <Text style={[s.typeTxt, { color: accentColor }]}>
-              {isVideo ? 'Video Call' : 'Voice Call'}
-            </Text>
+          <View style={s.topRow}>
+            <TouchableOpacity
+              onPress={() => {
+                if (callEndedRef.current) return
+
+                if (isVideo && connectedRef.current && Platform.OS === 'android' && FloatingBubble.isSupported) {
+                  bubbleOperationInProgress.current = true
+
+                  FloatingBubble.enterPiP(true)
+                    .then((pipOk) => {
+                      try {
+                        router.navigate('/(tab)')
+                      } catch (e) {
+                        console.warn('[Call] Back arrow navigate error:', e?.message)
+                        try { router.navigate('/(tab)/index') } catch (__) { }
+                      }
+                    })
+                    .catch(() => {
+                      try {
+                        router.navigate('/(tab)')
+                      } catch (e) {
+                        try { router.navigate('/(tab)/index') } catch (__) { }
+                      }
+                    })
+                    .finally(() => {
+                      setTimeout(() => {
+                        bubbleOperationInProgress.current = false
+                      }, 500)
+                    })
+                } else {
+                  try {
+                    router.navigate('/(tab)')
+                  } catch (e) {
+                    console.warn('[Call] Back arrow navigate error:', e?.message)
+                    try { router.navigate('/(tab)/index') } catch (__) { }
+                  }
+                }
+              }}
+              style={s.backBtn}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="chevron-back" size={24} color={C.white} />
+            </TouchableOpacity>
+
+            <View style={[s.typePill, { borderColor: accentColor + '40', backgroundColor: accentColor + '15' }]}>
+              <View style={[s.typeDot, { backgroundColor: accentColor }]} />
+              <Text style={[s.typeTxt, { color: accentColor }]}>
+                {isVideo ? 'Video Call' : 'Voice Call'}
+              </Text>
+            </View>
+
+            <View style={s.backBtn} />
           </View>
 
           <Animated.View style={[s.timerWrap, {
@@ -791,7 +980,14 @@ const handleEnd = useCallback((remote = false) => {
                 icon={muted ? 'mic-off' : 'mic'}
                 label={muted ? 'Unmute' : 'Mute'}
                 active={muted}
-                onPress={() => { const v = !muted; setM(v); setMuted(v) }}
+                onPress={() => {
+                  const v = !muted
+                  setM(v)
+                  setMuted(v)
+                  if (Platform.OS === 'android' && FloatingBubble.isSupported) {
+                    try { FloatingBubble.updateMuteState(v) } catch (_) { }
+                  }
+                }}
               />
               {isVideo && (
                 <CtrlBtn
@@ -819,7 +1015,15 @@ const handleEnd = useCallback((remote = false) => {
                   icon={speakerOn ? 'volume-high' : 'volume-low'}
                   label={speakerOn ? 'Speaker' : 'Earpiece'}
                   active={speakerOn}
-                  onPress={() => { const n = !speakerOn; setSpeakerOn(n); speakerOnRef.current = n; setSpeaker(n) }}
+                  onPress={() => {
+                    const n = !speakerOn
+                    setSpeakerOn(n)
+                    speakerOnRef.current = n
+                    setSpeaker(n)
+                    if (Platform.OS === 'android' && FloatingBubble.isSupported) {
+                      try { FloatingBubble.updateSpeakerState(n) } catch (_) { }
+                    }
+                  }}
                 />
               )}
             </View>
@@ -835,6 +1039,8 @@ const s = StyleSheet.create({
   waitingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(5,8,16,0.52)' },
   topSafe: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, paddingTop: Platform.OS === 'android' ? 36 : 0 },
   topBar: { alignItems: 'center', paddingTop: 14, gap: 8 },
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingHorizontal: 16 },
+  backBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: 19, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' },
   typePill: { flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 24 },
   typeDot: { width: 6, height: 6, borderRadius: 3, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 5, elevation: 4 },
   typeTxt: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6 },

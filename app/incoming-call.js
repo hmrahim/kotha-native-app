@@ -66,7 +66,6 @@ function BackgroundOrbs({ isVideo }) {
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {/* Top-left teal orb */}
       <Animated.View style={[s.orb, {
         width: W * 0.85,
         height: W * 0.85,
@@ -77,7 +76,6 @@ function BackgroundOrbs({ isVideo }) {
         opacity: orb1.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
         transform: [{ scale: orb1.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }) }],
       }]} />
-      {/* Bottom-right blue orb */}
       <Animated.View style={[s.orb, {
         width: W * 0.9,
         height: W * 0.9,
@@ -88,7 +86,6 @@ function BackgroundOrbs({ isVideo }) {
         opacity: orb2.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }),
         transform: [{ scale: orb2.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }) }],
       }]} />
-      {/* Center accent orb */}
       <Animated.View style={[s.orb, {
         width: W * 0.5,
         height: W * 0.5,
@@ -223,46 +220,59 @@ export default function IncomingCallScreen() {
     return () => { cancelled = true }
   }, [state.type])
 
-  // Auto-close
+  // Auto-close when call ends externally (rejected/canceled/ended by caller)
   useEffect(() => {
     if (state.phase !== 'incoming') {
-      if (acceptingRef.current) return
+      if (acceptingRef.current) return // we are accepting — do NOT close
       safeStop()
       try { router.back() } catch (_) {}
     }
   }, [state.phase])
 
-  const handleAccept = useCallback(async () => {
+  // ── FIX: Accept immediately using state data — do NOT wait for server callback ──
+  // All the info we need (callId, roomId, type, peer) is already in CallContext
+  // state from when the incoming call was dispatched. Waiting for the socket
+  // callback causes the screen to disappear when the callback is slow or if the
+  // server doesn't acknowledge quickly enough.
+  const handleAccept = useCallback(() => {
     if (acceptingRef.current) return
     acceptingRef.current = true
     safeStop()
+
     const socket = getSocket()
     if (!socket || !state.callId) {
+      // No socket or no call — reset and go back
       dispatch({ type: 'RESET' })
       try { router.back() } catch (_) {}
       return
     }
+
+    // Navigate immediately — we already have everything we need in state.
+    // This is the fix: the old code waited for the socket ack callback which
+    // sometimes never arrived (or arrived with ok:false), causing the screen
+    // to vanish without opening the call screen.
+    dispatch({ type: 'ACTIVE' })
+    router.replace({
+      pathname: '/call',
+      params: {
+        callId:     state.callId,
+        roomId:     state.roomId  || '',
+        type:       state.type    || 'voice',
+        peerName:   state.peer?.name   || 'User',
+        peerAvatar: state.peer?.avatar || '',
+        outgoing:   '0',
+      },
+    })
+
+    // Notify server in fire-and-forget fashion. The call screen handles the
+    // WebRTC setup independently via socket events (webrtc:offer, etc.).
     socket.emit('call:accept', { callId: state.callId }, (response) => {
-      if (response?.ok) {
-        const { roomId, type, caller } = response
-        router.replace({
-          pathname: '/call',
-          params: {
-            callId:     state.callId,
-            roomId,
-            type,
-            peerName:   caller?.name   || 'User',
-            peerAvatar: caller?.avatar || '',
-            outgoing:   '0',
-          },
-        })
-      } else {
-        acceptingRef.current = false
-        dispatch({ type: 'RESET' })
-        try { router.back() } catch (_) {}
+      if (!response?.ok) {
+        // Server rejected — the call screen will receive call:ended and clean up.
+        console.warn('[IncomingCall] server rejected accept:', response?.error)
       }
     })
-  }, [state.callId, state.type, dispatch, router])
+  }, [state.callId, state.roomId, state.type, state.peer, dispatch, router])
 
   const handleReject = useCallback(() => {
     safeStop()
@@ -398,7 +408,6 @@ const s = StyleSheet.create({
     position: 'absolute',
   },
 
-  // Subtle dot-grid overlay for texture
   gridOverlay: {
     ...StyleSheet.absoluteFillObject,
     opacity: 0.03,
@@ -419,7 +428,6 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
   },
 
-  // ── Header badge ──
   headerWrap: {
     alignSelf: 'stretch',
     alignItems: 'center',
@@ -453,7 +461,6 @@ const s = StyleSheet.create({
     letterSpacing: 0.6,
   },
 
-  // ── Avatar ──
   avatarSection: {
     flex: 1,
     alignItems: 'center',
@@ -476,9 +483,7 @@ const s = StyleSheet.create({
     borderWidth: 1.5,
   },
 
-  avatarContainer: {
-    // sits on top of ripples
-  },
+  avatarContainer: {},
 
   avatarGlassRing: {
     width: 148,
@@ -547,7 +552,6 @@ const s = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // ── Hint ──
   swipeHint: {
     color: C.whiteDD,
     fontSize: 12,
@@ -556,7 +560,6 @@ const s = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  // ── Buttons ──
   actionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

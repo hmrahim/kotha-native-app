@@ -10,6 +10,7 @@ import { AppState, Platform, View } from 'react-native'
 import AnimatedSplash from '../components/AnimatedSplash'
 import AppLoader from '../components/AppLoader'
 import NetworkBanner from '../components/NetworkBanner'
+import ActiveCallBanner from '../components/ActiveCallbanner'
 import { AuthProvider, useAuth } from '../context/AuthContext'
 import { CallProvider, useCall } from '../context/CallContext'
 import { registerFcmToken } from '../services/api'
@@ -17,34 +18,34 @@ import '../services/notification'
 import { getActiveChatUser, getSocket } from '../services/socket'
 import { playIncoming } from '../services/sounds'
 
-let registerForPushNotifications  = async () => null
-let setupNotificationListeners    = () => () => {}
-let getInitialNotification        = async () => null
-let clearBadge                    = async () => {}
-let setupAndroidChannels          = async () => {}
-let registerBackgroundHandler     = () => {}
-let setupNotifeeListeners         = () => () => {}
-let cancelCallNotification        = async () => {}
-let setupForegroundHandler        = () => () => {}
+let registerForPushNotifications = async () => null
+let setupNotificationListeners = () => () => { }
+let getInitialNotification = async () => null
+let clearBadge = async () => { }
+let setupAndroidChannels = async () => { }
+let registerBackgroundHandler = () => { }
+let setupNotifeeListeners = () => () => { }
+let cancelCallNotification = async () => { }
+let setupForegroundHandler = () => () => { }
 
 if (Platform.OS !== 'web') {
   try {
     const fcm = require('../services/fcm')
     registerForPushNotifications = fcm.registerForPushNotifications
-    setupNotificationListeners   = fcm.setupNotificationListeners
-    getInitialNotification       = fcm.getInitialNotification
-    clearBadge                   = fcm.clearBadge
-    setupAndroidChannels         = fcm.setupAndroidChannels
-    registerBackgroundHandler    = fcm.registerBackgroundHandler
-    setupNotifeeListeners        = fcm.setupNotifeeListeners
-    cancelCallNotification       = fcm.cancelCallNotification
-    setupForegroundHandler       = fcm.setupForegroundHandler
+    setupNotificationListeners = fcm.setupNotificationListeners
+    getInitialNotification = fcm.getInitialNotification
+    clearBadge = fcm.clearBadge
+    setupAndroidChannels = fcm.setupAndroidChannels
+    registerBackgroundHandler = fcm.registerBackgroundHandler
+    setupNotifeeListeners = fcm.setupNotifeeListeners
+    cancelCallNotification = fcm.cancelCallNotification
+    setupForegroundHandler = fcm.setupForegroundHandler
   } catch (e) {
     console.warn('[Layout] FCM import failed:', e?.message)
   }
 }
 
-SplashScreen.preventAutoHideAsync().catch(() => {})
+SplashScreen.preventAutoHideAsync().catch(() => { })
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 2, staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -96,7 +97,7 @@ const acceptCallDirect = (router, dispatch, data) => {
               outgoing: '0',
             },
           })
-        } catch (_) {}
+        } catch (_) { }
       } else {
         console.warn('[Layout] direct accept failed:', response?.error)
       }
@@ -120,7 +121,7 @@ const showIncomingScreen = (router, dispatch, data) => {
       },
     },
   })
-  try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) {}
+  try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) { }
 }
 
 // ─── Navigate from notification data ────────────────────────────────────────
@@ -140,7 +141,7 @@ const navigateFromNotification = (router, data, dispatch) => {
         pathname: '/chat',
         params: { id: data.senderId, name: data.senderName ?? 'Chat', avater: data.senderAvatar ?? '' },
       })
-    } catch (_) {}
+    } catch (_) { }
     return
   }
 
@@ -155,16 +156,16 @@ const navigateFromNotification = (router, data, dispatch) => {
         pathname: '/chat',
         params: { id: data.senderId, name: data.senderName ?? 'Chat', avater: data.senderAvatar ?? '' },
       })
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 
 function AppNavigator() {
   const { user, mongoUser, loading, emailVerified } = useAuth()
-  const { dispatch }  = useCall()
-  const router        = useRouter()
-  const segments      = useSegments()
-  const appState      = useRef(AppState.currentState)
+  const { dispatch } = useCall()
+  const router = useRouter()
+  const segments = useSegments()
+  const appState = useRef(AppState.currentState)
 
   const [nativeSplashHidden, setNativeSplashHidden] = useState(false)
   const [showAnimSplash] = useState(false)
@@ -175,10 +176,10 @@ function AppNavigator() {
 
   useEffect(() => {
     if (!nativeSplashHidden || loading) return
-    const inAuth   = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
+    const inAuth = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
     const inVerify = segments[0] === 'verify-email'
     // ✅ Fix: (tab) group-এ থাকলে আবার redirect করো না — double-navigate prevent
-    const inTab    = segments[0] === '(tab)'
+    const inTab = segments[0] === '(tab)'
 
     const t = setTimeout(() => {
       if (!user) {
@@ -204,7 +205,7 @@ function AppNavigator() {
         if (senderId?.toString() === mongoUser._id?.toString()) return
         const activeChatId = getActiveChatUser()
         if (activeChatId && activeChatId === senderId?.toString()) return
-        if (segments[0] !== 'chat') { try { playIncoming() } catch (_) {} }
+        if (segments[0] !== 'chat') { try { playIncoming() } catch (_) { } }
       })
       clearInterval(interval)
     }, 1000)
@@ -217,7 +218,7 @@ function AppNavigator() {
       if (msg?.senderId?.toString() === mongoUser._id?.toString()) return
       const activeChatId = getActiveChatUser()
       if (activeChatId && activeChatId === msg?.senderId?.toString()) return
-      if (segments[0] !== 'chat') { try { playIncoming() } catch (_) {} }
+      if (segments[0] !== 'chat') { try { playIncoming() } catch (_) { } }
     }
     const timer = setTimeout(() => {
       const socket = getSocket()
@@ -313,7 +314,7 @@ function AppNavigator() {
     return (
       <>
         <StatusBar style="light" backgroundColor={BG} />
-        <AnimatedSplash onDone={() => {}} />
+        <AnimatedSplash onDone={() => { }} />
       </>
     )
   }
@@ -322,22 +323,25 @@ function AppNavigator() {
     <View style={{ flex: 1, backgroundColor: BG }}>
       <StatusBar style="light" backgroundColor={BG} />
       <NetworkBanner />
+      {/* ✅ Messenger-style active call banner — call চলার সময় অন্য screen এ গেলে দেখাবে */}
+
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: BG }, animation: 'none', animationDuration: 150 }}>
-        <Stack.Screen name="(tab)"            options={{ animation: 'none' }} />
-        <Stack.Screen name="login"            options={{ animation: 'fade', animationDuration: 200 }} />
-        <Stack.Screen name="register"         options={{ animation: 'slide_from_bottom', animationDuration: 250 }} />
-        <Stack.Screen name="verify-email"     options={{ animation: 'fade', animationDuration: 200 }} />
-        <Stack.Screen name="forgot-password"  options={{ animation: 'slide_from_bottom', animationDuration: 220, gestureEnabled: true }} />
-        <Stack.Screen name="chat"             options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true, fullScreenGestureEnabled: true }} />
-        <Stack.Screen name="profile"          options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
-        <Stack.Screen name="settings"         options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
-        <Stack.Screen name="developer"        options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
-        <Stack.Screen name="change-password"  options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
-        <Stack.Screen name="call"             options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#000' }, gestureEnabled: false }} />
-        <Stack.Screen name="incoming-call"    options={{ animation: 'fade', animationDuration: 200, gestureEnabled: false }} />
-        <Stack.Screen name="add-user"         options={{ animation: 'slide_from_bottom', animationDuration: 220, gestureEnabled: true }} />
+        <Stack.Screen name="(tab)" options={{ animation: 'none' }} />
+        <Stack.Screen name="login" options={{ animation: 'fade', animationDuration: 200 }} />
+        <Stack.Screen name="register" options={{ animation: 'slide_from_bottom', animationDuration: 250 }} />
+        <Stack.Screen name="verify-email" options={{ animation: 'fade', animationDuration: 200 }} />
+        <Stack.Screen name="forgot-password" options={{ animation: 'slide_from_bottom', animationDuration: 220, gestureEnabled: true }} />
+        <Stack.Screen name="chat" options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true, fullScreenGestureEnabled: true }} />
+        <Stack.Screen name="profile" options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
+        <Stack.Screen name="settings" options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
+        <Stack.Screen name="developer" options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
+        <Stack.Screen name="change-password" options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
+        <Stack.Screen name="call" options={{ animation: 'fade', animationDuration: 200, contentStyle: { backgroundColor: '#000' }, gestureEnabled: false }} />
+        <Stack.Screen name="incoming-call" options={{ animation: 'fade', animationDuration: 200, gestureEnabled: false }} />
+        <Stack.Screen name="add-user" options={{ animation: 'slide_from_bottom', animationDuration: 220, gestureEnabled: true }} />
         <Stack.Screen name="message-requests" options={{ animation: 'slide_from_right', animationDuration: 200, gestureEnabled: true }} />
       </Stack>
+      <ActiveCallBanner />
     </View>
   )
 }

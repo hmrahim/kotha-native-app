@@ -1,4 +1,3 @@
-
 import { NativeModules, Platform, NativeEventEmitter } from 'react-native'
 
 const NativeBubble = NativeModules.FloatingBubble
@@ -61,10 +60,24 @@ export const FloatingBubble = {
     safeCall('hide')
   },
 
+  // ✅ NEW: Mute state update → bubble এ mute button UI update হবে
+  // call.js এ mute toggle করলে এটা call করবে
+  updateMuteState(isMuted = false) {
+    if (!isSupported) return
+    safeCall('updateMuteState', isMuted)
+  },
+
+  // ✅ NEW: Speaker state update → bubble এ speaker button UI update হবে
+  updateSpeakerState(isSpeakerOn = true) {
+    if (!isSupported) return
+    safeCall('updateSpeakerState', isSpeakerOn)
+  },
+
   /* ───── Android Picture-in-Picture (for VIDEO calls) ─────
      Returns true if the activity successfully entered PiP mode.
      The existing call screen UI will be shrunk into a floating window
-     and continues rendering live remote + local video. */
+     and continues rendering live remote + local video (just like
+     WhatsApp / Telegram / Meet). We hide decorations via `inPiP` state. */
 
   async enterPiP(isVideo = true) {
     if (!isSupported || !NativeBubble?.enterPictureInPicture) return false
@@ -83,6 +96,20 @@ export const FloatingBubble = {
   onEndCallPressed(callback) {
     if (!isSupported || !emitter) return () => {}
     const sub = emitter.addListener('BubbleEndCallPressed', callback)
+    return () => sub.remove()
+  },
+
+  // ✅ NEW: Audio bubble এ mute button press event
+  onMutePressed(callback) {
+    if (!isSupported || !emitter) return () => {}
+    const sub = emitter.addListener('BubbleMutePressed', callback)
+    return () => sub.remove()
+  },
+
+  // ✅ NEW: Audio bubble এ speaker button press event
+  onSpeakerPressed(callback) {
+    if (!isSupported || !emitter) return () => {}
+    const sub = emitter.addListener('BubbleSpeakerPressed', callback)
     return () => sub.remove()
   },
 

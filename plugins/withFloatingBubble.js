@@ -99,6 +99,36 @@ public class FloatingBubbleModule extends ReactContextBaseJavaModule {
         } catch (Exception ignored) {}
     }
 
+    // ✅ NEW: mute toggle from JS side → service updates bubble UI
+    @ReactMethod
+    public void updateMuteState(boolean isMuted) {
+        try {
+            Intent intent = new Intent(reactContext, FloatingBubbleService.class);
+            intent.setAction("UPDATE_MUTE");
+            intent.putExtra("isMuted", isMuted);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                reactContext.startForegroundService(intent);
+            } else {
+                reactContext.startService(intent);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // ✅ NEW: speaker toggle from JS side
+    @ReactMethod
+    public void updateSpeakerState(boolean isSpeakerOn) {
+        try {
+            Intent intent = new Intent(reactContext, FloatingBubbleService.class);
+            intent.setAction("UPDATE_SPEAKER");
+            intent.putExtra("isSpeakerOn", isSpeakerOn);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                reactContext.startForegroundService(intent);
+            } else {
+                reactContext.startService(intent);
+            }
+        } catch (Exception ignored) {}
+    }
+
     @ReactMethod
     public void enterPictureInPicture(boolean isVideo, Promise promise) {
         try {
@@ -133,6 +163,11 @@ public class FloatingBubbleModule extends ReactContextBaseJavaModule {
 }
 `
 
+// ✅ FIXED FloatingBubbleService:
+//   - Voice call: name + timer + MUTE button + SPEAKER button + END button
+//   - Video call: name + timer + END button only (PiP handles the video preview)
+//   - Mute/Speaker buttons respond to JS updates via intent actions
+//   - Bubble tap brings app to foreground (fires BubbleTapped event)
 const FLOATING_BUBBLE_SERVICE = `package ${PKG};
 
 import android.app.Notification;
@@ -171,14 +206,51 @@ public class FloatingBubbleService extends Service {
     private String currentCallType = "voice";
     private boolean foregroundStarted = false;
 
+    // ✅ Control state — mute/speaker toggle থেকে update হবে
+    private boolean isMuted = false;
+    private boolean isSpeakerOn = true;
+    private ImageView muteIconView = null;
+    private ImageView speakerIconView = null;
+    private android.graphics.drawable.GradientDrawable muteBgDrawable = null;
+    private android.graphics.drawable.GradientDrawable speakerBgDrawable = null;
+
     @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onCreate() {
         super.onCreate();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-        // NOTE: Do NOT call startForeground here.
-        // startForeground MUST be called in onStartCommand within 5 seconds.
+        // ✅ CRITICAL FIX: Android 14+ requires startForeground() to be called
+        // within 5 seconds of startForegroundService(). Call it immediately in
+        // onCreate() with a minimal notification so the OS timer never fires.
+        // onStartCommand() will upgrade it with the real notification/type.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !foregroundStarted) {
+            NotificationChannel ch = new NotificationChannel(
+                CHANNEL_ID, "Call in progress", NotificationManager.IMPORTANCE_LOW);
+            ch.setShowBadge(false);
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.createNotificationChannel(ch);
+            Notification n = new Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("Call in progress")
+                .setSmallIcon(android.R.drawable.ic_menu_call)
+                .setOngoing(true)
+                .build();
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(NOTIF_ID, n,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE |
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA);
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIF_ID, n,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+                } else {
+                    startForeground(NOTIF_ID, n);
+                }
+                foregroundStarted = true;
+            } catch (Exception e) {
+                try { startForeground(NOTIF_ID, n); foregroundStarted = true; } catch (Exception ignored) {}
+            }
+        }
     }
 
     private void startInForeground(String callType) {
@@ -239,6 +311,22 @@ public class FloatingBubbleService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent != null ? intent.getAction() : null;
+
+        // ✅ Handle mute/speaker update from JS (no UI rebuild needed)
+        // ✅ FIX: call startInForeground first if not yet started (Android 14+ requirement)
+        if (!foregroundStarted) startInForeground("voice");
+        if ("UPDATE_MUTE".equals(action)) {
+            isMuted = intent.getBooleanExtra("isMuted", false);
+            updateMuteButtonUI();
+            return START_NOT_STICKY;
+        }
+        if ("UPDATE_SPEAKER".equals(action)) {
+            isSpeakerOn = intent.getBooleanExtra("isSpeakerOn", true);
+            updateSpeakerButtonUI();
+            return START_NOT_STICKY;
+        }
+
         String callType = intent != null && intent.hasExtra("callType")
             ? intent.getStringExtra("callType") : "voice";
         String peerName = intent != null && intent.hasExtra("peerName")
@@ -246,7 +334,7 @@ public class FloatingBubbleService extends Service {
         long startedAt = intent != null && intent.hasExtra("startedAt")
             ? intent.getLongExtra("startedAt", 0) : 0;
 
-        // CRITICAL: startForeground must be called immediately in onStartCommand
+        // CRITICAL: startForeground must be called immediately
         if (!foregroundStarted || !callType.equals(currentCallType)) {
             currentCallType = callType;
             startInForeground(callType);
@@ -255,6 +343,15 @@ public class FloatingBubbleService extends Service {
         boolean canDraw = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                 || Settings.canDrawOverlays(this);
         if (canDraw) {
+            // ✅ Remove old bubble if call type changed, then re-show
+            if (bubbleView != null) {
+                try { wm.removeView(bubbleView); } catch (Exception ignored) {}
+                bubbleView = null;
+                muteIconView = null;
+                speakerIconView = null;
+                muteBgDrawable = null;
+                speakerBgDrawable = null;
+            }
             showBubble(peerName, callType, startedAt);
         }
         return START_NOT_STICKY;
@@ -265,43 +362,85 @@ public class FloatingBubbleService extends Service {
             TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
     }
 
+    // ✅ Update mute button appearance without rebuilding the whole bubble
+    private void updateMuteButtonUI() {
+        if (muteBgDrawable == null || muteIconView == null) return;
+        try {
+            muteBgDrawable.setColor(isMuted
+                ? Color.parseColor("#4FFF4560")
+                : Color.parseColor("#33FFFFFF"));
+            muteIconView.setColorFilter(isMuted
+                ? Color.WHITE
+                : Color.parseColor("#AAFFFFFF"));
+        } catch (Exception ignored) {}
+    }
+
+    // ✅ Update speaker button appearance without rebuilding
+    private void updateSpeakerButtonUI() {
+        if (speakerBgDrawable == null || speakerIconView == null) return;
+        try {
+            speakerBgDrawable.setColor(isSpeakerOn
+                ? Color.parseColor("#3300E5A0")
+                : Color.parseColor("#33FFFFFF"));
+            speakerIconView.setColorFilter(isSpeakerOn
+                ? Color.parseColor("#00E5A0")
+                : Color.parseColor("#AAFFFFFF"));
+        } catch (Exception ignored) {}
+    }
+
     private void showBubble(String peerName, String callType, long startedAt) {
         if (bubbleView != null) return;
 
+        boolean isVideo = "video".equals(callType);
+
+        // ── Root card ──────────────────────────────────────────────────
         FrameLayout root = new FrameLayout(this);
         android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
         bg.setColor(Color.parseColor("#F0101626"));
-        bg.setCornerRadius(dp(22));
-        bg.setStroke(dp(1), Color.parseColor("#334F8EF7"));
+        bg.setCornerRadius(dp(24));
+        bg.setStroke(dp(1), isVideo
+            ? Color.parseColor("#334F8EF7")
+            : Color.parseColor("#3300E5A0"));
         root.setBackground(bg);
-        root.setPadding(dp(12), dp(10), dp(12), dp(10));
         root.setElevation(dp(8));
 
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.HORIZONTAL);
-        container.setGravity(Gravity.CENTER_VERTICAL);
+        // ── Main vertical layout ───────────────────────────────────────
+        LinearLayout mainCol = new LinearLayout(this);
+        mainCol.setOrientation(LinearLayout.VERTICAL);
+        mainCol.setPadding(dp(12), dp(10), dp(12), dp(10));
+        FrameLayout.LayoutParams mainLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT);
+        mainCol.setLayoutParams(mainLp);
 
+        // ── Top row: icon + name/timer + end button ────────────────────
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        // Call icon
         FrameLayout iconWrap = new FrameLayout(this);
-        LinearLayout.LayoutParams iw = new LinearLayout.LayoutParams(dp(40), dp(40));
+        LinearLayout.LayoutParams iw = new LinearLayout.LayoutParams(dp(38), dp(38));
         iw.setMargins(0, 0, dp(10), 0);
         iconWrap.setLayoutParams(iw);
         android.graphics.drawable.GradientDrawable iconBg = new android.graphics.drawable.GradientDrawable();
         iconBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-        boolean isVideo = "video".equals(callType);
         iconBg.setColor(isVideo ? Color.parseColor("#334F8EF7") : Color.parseColor("#3300E5A0"));
         iconWrap.setBackground(iconBg);
 
         ImageView ic = new ImageView(this);
         ic.setImageResource(isVideo ? android.R.drawable.ic_menu_camera : android.R.drawable.ic_menu_call);
         ic.setColorFilter(isVideo ? Color.parseColor("#4F8EF7") : Color.parseColor("#00E5A0"));
-        FrameLayout.LayoutParams icLp = new FrameLayout.LayoutParams(dp(22), dp(22));
+        FrameLayout.LayoutParams icLp = new FrameLayout.LayoutParams(dp(20), dp(20));
         icLp.gravity = Gravity.CENTER;
         ic.setLayoutParams(icLp);
         iconWrap.addView(ic);
 
+        // Name + timer column
         LinearLayout textCol = new LinearLayout(this);
         textCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         textCol.setLayoutParams(tcLp);
 
         TextView name = new TextView(this);
@@ -326,34 +465,173 @@ public class FloatingBubbleService extends Service {
         textCol.addView(name);
         textCol.addView(chrono);
 
-        final FrameLayout endBtn = new FrameLayout(this);
-        LinearLayout.LayoutParams ebLp = new LinearLayout.LayoutParams(dp(36), dp(36));
-        ebLp.setMargins(dp(10), 0, 0, 0);
-        endBtn.setLayoutParams(ebLp);
-        android.graphics.drawable.GradientDrawable endBg = new android.graphics.drawable.GradientDrawable();
-        endBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-        endBg.setColor(Color.parseColor("#FF4560"));
-        endBtn.setBackground(endBg);
+        topRow.addView(iconWrap);
+        topRow.addView(textCol);
+        mainCol.addView(topRow);
 
-        ImageView endIc = new ImageView(this);
-        endIc.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
-        endIc.setColorFilter(Color.WHITE);
-        FrameLayout.LayoutParams endLp = new FrameLayout.LayoutParams(dp(18), dp(18));
-        endLp.gravity = Gravity.CENTER;
-        endIc.setLayoutParams(endLp);
-        endBtn.addView(endIc);
+        // ── Bottom row: Mute + (Speaker for voice / nothing for video) + End ──
+        // Video call এও Mute + End দেখাবে bubble এ
+        {
+            LinearLayout ctrlRow = new LinearLayout(this);
+            ctrlRow.setOrientation(LinearLayout.HORIZONTAL);
+            ctrlRow.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams crLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+            crLp.setMargins(0, dp(10), 0, 0);
+            ctrlRow.setLayoutParams(crLp);
 
-        endBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                FloatingBubbleModule.emit("BubbleEndCallPressed", null);
+            // ── Mute button ──
+            LinearLayout muteWrap = new LinearLayout(this);
+            muteWrap.setOrientation(LinearLayout.VERTICAL);
+            muteWrap.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams mwLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            muteWrap.setLayoutParams(mwLp);
+
+            final FrameLayout muteBtn = new FrameLayout(this);
+            LinearLayout.LayoutParams mbLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+            muteBtn.setLayoutParams(mbLp);
+            muteBgDrawable = new android.graphics.drawable.GradientDrawable();
+            muteBgDrawable.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+            muteBgDrawable.setColor(Color.parseColor("#33FFFFFF"));
+            muteBtn.setBackground(muteBgDrawable);
+
+            muteIconView = new ImageView(this);
+            muteIconView.setImageResource(android.R.drawable.ic_btn_speak_now);
+            muteIconView.setColorFilter(Color.parseColor("#AAFFFFFF"));
+            FrameLayout.LayoutParams miLp = new FrameLayout.LayoutParams(dp(20), dp(20));
+            miLp.gravity = Gravity.CENTER;
+            muteIconView.setLayoutParams(miLp);
+            muteBtn.addView(muteIconView);
+
+            TextView muteLbl = new TextView(this);
+            muteLbl.setText("Mute");
+            muteLbl.setTextColor(Color.parseColor("#AAFFFFFF"));
+            muteLbl.setTextSize(9);
+            muteLbl.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams mlLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+            mlLp.setMargins(0, dp(3), 0, 0);
+            muteLbl.setLayoutParams(mlLp);
+
+            muteBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    FloatingBubbleModule.emit("BubbleMutePressed", null);
+                }
+            });
+
+            muteWrap.addView(muteBtn);
+            muteWrap.addView(muteLbl);
+
+            // ── Speaker button (VOICE ONLY) ──
+            if (!isVideo) {
+                LinearLayout speakerWrap = new LinearLayout(this);
+                speakerWrap.setOrientation(LinearLayout.VERTICAL);
+                speakerWrap.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                speakerWrap.setLayoutParams(swLp);
+
+                final FrameLayout speakerBtn = new FrameLayout(this);
+                LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+                speakerBtn.setLayoutParams(sbLp);
+                speakerBgDrawable = new android.graphics.drawable.GradientDrawable();
+                speakerBgDrawable.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+                speakerBgDrawable.setColor(isSpeakerOn
+                    ? Color.parseColor("#3300E5A0")
+                    : Color.parseColor("#33FFFFFF"));
+                speakerBtn.setBackground(speakerBgDrawable);
+
+                speakerIconView = new ImageView(this);
+                speakerIconView.setImageResource(android.R.drawable.ic_lock_silent_mode_off);
+                speakerIconView.setColorFilter(isSpeakerOn
+                    ? Color.parseColor("#00E5A0")
+                    : Color.parseColor("#AAFFFFFF"));
+                FrameLayout.LayoutParams siLp = new FrameLayout.LayoutParams(dp(20), dp(20));
+                siLp.gravity = Gravity.CENTER;
+                speakerIconView.setLayoutParams(siLp);
+                speakerBtn.addView(speakerIconView);
+
+                TextView speakerLbl = new TextView(this);
+                speakerLbl.setText("Speaker");
+                speakerLbl.setTextColor(isSpeakerOn
+                    ? Color.parseColor("#00E5A0")
+                    : Color.parseColor("#AAFFFFFF"));
+                speakerLbl.setTextSize(9);
+                speakerLbl.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams slLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                slLp.setMargins(0, dp(3), 0, 0);
+                speakerLbl.setLayoutParams(slLp);
+
+                speakerBtn.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        FloatingBubbleModule.emit("BubbleSpeakerPressed", null);
+                    }
+                });
+
+                speakerWrap.addView(speakerBtn);
+                speakerWrap.addView(speakerLbl);
+                ctrlRow.addView(speakerWrap);
             }
-        });
 
-        container.addView(iconWrap);
-        container.addView(textCol);
-        container.addView(endBtn);
-        root.addView(container);
+            // ── End call button (big, center for video / side for voice) ──
+            LinearLayout endWrap = new LinearLayout(this);
+            endWrap.setOrientation(LinearLayout.VERTICAL);
+            endWrap.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams ewLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            endWrap.setLayoutParams(ewLp);
 
+            final FrameLayout endCtrlBtn = new FrameLayout(this);
+            int endSize = isVideo ? dp(44) : dp(40);
+            LinearLayout.LayoutParams ecbLp = new LinearLayout.LayoutParams(endSize, endSize);
+            endCtrlBtn.setLayoutParams(ecbLp);
+            android.graphics.drawable.GradientDrawable endCtrlBg = new android.graphics.drawable.GradientDrawable();
+            endCtrlBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+            endCtrlBg.setColor(Color.parseColor("#FF4560"));
+            endCtrlBtn.setBackground(endCtrlBg);
+
+            ImageView endCtrlIc = new ImageView(this);
+            endCtrlIc.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
+            endCtrlIc.setColorFilter(Color.WHITE);
+            int endIcSize = isVideo ? dp(22) : dp(20);
+            FrameLayout.LayoutParams eciLp = new FrameLayout.LayoutParams(endIcSize, endIcSize);
+            eciLp.gravity = Gravity.CENTER;
+            endCtrlIc.setLayoutParams(eciLp);
+            endCtrlBtn.addView(endCtrlIc);
+
+            TextView endCtrlLbl = new TextView(this);
+            endCtrlLbl.setText("End");
+            endCtrlLbl.setTextColor(Color.parseColor("#FFAAAAAA"));
+            endCtrlLbl.setTextSize(9);
+            endCtrlLbl.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams eclLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+            eclLp.setMargins(0, dp(3), 0, 0);
+            endCtrlLbl.setLayoutParams(eclLp);
+
+            endCtrlBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    FloatingBubbleModule.emit("BubbleEndCallPressed", null);
+                }
+            });
+
+            endWrap.addView(endCtrlBtn);
+            endWrap.addView(endCtrlLbl);
+
+            ctrlRow.addView(muteWrap);
+            ctrlRow.addView(endWrap);
+            mainCol.addView(ctrlRow);
+        }
+
+        root.addView(mainCol);
+
+        // ── Tap root → bring app to foreground ────────────────────────
         root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 FloatingBubbleModule.emit("BubbleTapped", null);
@@ -369,12 +647,16 @@ public class FloatingBubbleService extends Service {
             }
         });
 
+        // ── Window params ──────────────────────────────────────────────
         int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
             ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             : WindowManager.LayoutParams.TYPE_PHONE;
 
+        // Voice: Mute + Speaker + End (3 columns) = wider; Video: Mute + End (2 columns) = medium
+        int bubbleWidth = isVideo ? dp(200) : dp(230);
+
         params = new WindowManager.LayoutParams(
-            dp(248), ViewGroup.LayoutParams.WRAP_CONTENT,
+            bubbleWidth, ViewGroup.LayoutParams.WRAP_CONTENT,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -384,6 +666,7 @@ public class FloatingBubbleService extends Service {
         params.x = dp(12);
         params.y = dp(80);
 
+        // ── Drag support ───────────────────────────────────────────────
         root.setOnTouchListener(new View.OnTouchListener() {
             int initX, initY;
             float touchX, touchY;
@@ -431,6 +714,10 @@ public class FloatingBubbleService extends Service {
         if (bubbleView != null && wm != null) {
             try { wm.removeView(bubbleView); } catch (Exception ignored) {}
             bubbleView = null;
+            muteIconView = null;
+            speakerIconView = null;
+            muteBgDrawable = null;
+            speakerBgDrawable = null;
         }
     }
 }
