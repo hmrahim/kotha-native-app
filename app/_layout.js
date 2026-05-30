@@ -1,6 +1,9 @@
-// going through /incoming-call again.
+// WhatsApp-style persistent cache — app kill করলেও data থাকবে
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister'
+import { QueryClient } from '@tanstack/react-query'
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
@@ -47,8 +50,27 @@ if (Platform.OS !== 'web') {
 
 SplashScreen.preventAutoHideAsync().catch(() => { })
 
+// ─── QueryClient — WhatsApp style ────────────────────────────────────────────
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 2, staleTime: 30_000, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      retry: 2,
+      staleTime: Infinity,
+      gcTime: 1000 * 60 * 60 * 24 * 7, // 7 দিন
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+    },
+  },
+})
+
+// ─── AsyncStorage Persister ───────────────────────────────────────────────────
+// App kill করলেও data AsyncStorage-এ থাকবে
+// পরের বার open করলে instantly পুরনো data দেখাবে
+const asyncStoragePersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'KOTHA_QUERY_CACHE',
+  throttleTime: 1000,
 })
 
 const BG = '#0D1117'
@@ -128,13 +150,11 @@ const showIncomingScreen = (router, dispatch, data) => {
 const navigateFromNotification = (router, data, dispatch) => {
   if (!data) return
 
-  // ✅ App killed → call accept (AsyncStorage থেকে)
   if (data?.notifType === 'call_accept' || (data?.wasAccepted && data?.callId)) {
     acceptCallDirect(router, dispatch, data)
     return
   }
 
-  // ✅ App killed → message tap (AsyncStorage থেকে)
   if (data?.notifType === 'message_tap' && data?.senderId) {
     try {
       router.push({
@@ -178,7 +198,6 @@ function AppNavigator() {
     if (!nativeSplashHidden || loading) return
     const inAuth = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'forgot-password'
     const inVerify = segments[0] === 'verify-email'
-    // ✅ Fix: (tab) group-এ থাকলে আবার redirect করো না — double-navigate prevent
     const inTab = segments[0] === '(tab)'
 
     const t = setTimeout(() => {
@@ -187,7 +206,6 @@ function AppNavigator() {
       } else if (!emailVerified) {
         if (!inVerify) router.replace('/verify-email')
       } else {
-        // ✅ inTab হলে আর replace করো না (unnecessary navigation বন্ধ)
         if (inAuth || inVerify || (!inTab && segments.length === 0)) router.replace('/(tab)')
       }
     }, 0)
@@ -233,7 +251,6 @@ function AppNavigator() {
     }
   }, [mongoUser?._id])
 
-  // ✅ Notification + FCM setup
   useEffect(() => {
     if (!mongoUser?._id || Platform.OS === 'web') return
 
@@ -251,7 +268,6 @@ function AppNavigator() {
     }
     init()
 
-    // Killed-state notification check (incl. AsyncStorage pending accept)
     const checkInitial = async () => {
       const data = await getInitialNotification()
       if (data) navigateFromNotification(router, data, dispatch)
@@ -265,7 +281,6 @@ function AppNavigator() {
     const unsubForeground = setupForegroundHandler()
 
     const unsubNotifee = setupNotifeeListeners({
-      // ✅ Foreground message notification tap → chat screen
       onTap: (data) => navigateFromNotification(router, data, dispatch),
       onAccept: (data) => {
         cancelCallNotification(data?.callId)
@@ -323,7 +338,6 @@ function AppNavigator() {
     <View style={{ flex: 1, backgroundColor: BG }}>
       <StatusBar style="light" backgroundColor={BG} />
       <NetworkBanner />
-      {/* ✅ Messenger-style active call banner — call চলার সময় অন্য screen এ গেলে দেখাবে */}
 
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: BG }, animation: 'none', animationDuration: 150 }}>
         <Stack.Screen name="(tab)" options={{ animation: 'none' }} />
@@ -348,12 +362,25 @@ function AppNavigator() {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+        dehydrateOptions: {
+          shouldDehydrateQuery: (query) => {
+            // শুধু এই 3টা cache persist হবে — বাকি memory-only
+            const persistKeys = ['chatList', 'messageRequests', 'messages']
+            return persistKeys.some((k) => query.queryKey[0] === k)
+          },
+        },
+      }}
+    >
       <AuthProvider>
         <CallProvider>
           <AppNavigator />
         </CallProvider>
       </AuthProvider>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   )
 }

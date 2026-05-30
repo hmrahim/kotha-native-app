@@ -31,7 +31,7 @@ export const setupAndroidChannels = async () => {
     id: 'incoming_call',
     name: 'Incoming Calls',
     importance: AndroidImportance.HIGH,
-    sound: 'ringtone',
+    sound: 'ringtun',
     vibration: true,
     vibrationPattern: [100, 1000, 500, 1000],
     bypassDnd: true,
@@ -115,28 +115,56 @@ const showCallNotification = async (data) => {
     await notifee.displayNotification({
       id:    `call_${data.callId}`,
       title: data.callerName || 'Incoming Call',
-      body:  data.callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
+      body:  data.callType === 'video' ? '📹 Incoming video call' : '📞 Incoming voice call',
       data,
       android: {
-        channelId:        'incoming_call',
-        importance:       AndroidImportance.HIGH,
-        visibility:       AndroidVisibility.PUBLIC,
-        category:         'call',
-        fullScreenAction: { id: 'default', launchActivity: 'default' },
-        pressAction:      { id: 'default', launchActivity: 'default' },
+        channelId:   'incoming_call',
+        importance:  AndroidImportance.HIGH,
+        visibility:  AndroidVisibility.PUBLIC,
+        category:    'call',
+
+        // ✅ KEY: fullScreenAction → IncomingCallActivity
+        // Screen off / lock screen এ এই Activity launch হবে
+        // IncomingCallActivity নিজে MainActivity কে সামনে আনবে
+        fullScreenAction: {
+          id:             'default',
+          launchActivity: 'com.kotha.app.IncomingCallActivity',
+          // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_NO_USER_ACTION
+          launchActivityFlags: [16777216, 262144],
+        },
+
+        // ✅ Notification body tap → IncomingCallActivity
+        pressAction: {
+          id:             'default',
+          launchActivity: 'com.kotha.app.IncomingCallActivity',
+          launchActivityFlags: [16777216, 262144],
+        },
+
         actions: [
-          { title: 'Accept',  pressAction: { id: 'accept',  launchActivity: 'default' } },
-          { title: 'Decline', pressAction: { id: 'decline' } },
+          {
+            title:       '✅ Accept',
+            pressAction: {
+              id:             'accept',
+              launchActivity: 'com.kotha.app.IncomingCallActivity',
+              launchActivityFlags: [16777216],
+            },
+          },
+          {
+            title:       '❌ Decline',
+            pressAction: { id: 'decline' },
+          },
         ],
-        sound:            'ringtone',
+
+        sound:            'ringtun',         // assets/sound/ringtun.mp3
         vibrationPattern: [100, 1000, 500, 1000],
         lights:           ['#0084FF', 500, 500],
         ongoing:          true,
         autoCancel:       false,
-        wakeUpScreen:     true,
+        wakeUpScreen:     true,              // screen জ্বলবে
         showChronometer:  false,
       },
     })
+    console.log('[FCM] ✅ Call notification displayed (foreground), callId:', data.callId)
   } catch (e) {
     console.warn('[FCM] showCallNotification error:', e?.message)
   }

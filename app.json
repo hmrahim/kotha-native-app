@@ -73,6 +73,7 @@
     },
     "plugins": [
       "./plugins/withFloatingBubble",
+      "./plugins/Withcallscreenlock",
       [
         "expo-notifications",
         {
@@ -146,7 +147,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "3546b7a0-20bc-4df8-b005-887216ea82b8"
+        "projectId": "7a81b1fd-1a5b-4234-91c5-164a07f3a5d9"
       }
     }
   }

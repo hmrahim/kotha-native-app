@@ -252,7 +252,12 @@ export default function Home() {
       const data = await getUser()
       return data ?? []
     },
-    staleTime: 10_000,
+    // WhatsApp-style: login এ একবার load হয়, তারপর শুধু socket events এ update
+    // app background/foreground করলে বা re-mount হলে reload হবে না
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     enabled: !!mongoUser,
   })
 
@@ -261,7 +266,10 @@ export default function Home() {
     queryKey: ['messageRequests'],
     queryFn: async () => (await getMessageRequests()) ?? [],
     enabled: !!mongoUser,
-    staleTime: 10_000,
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
   const requestCount = requests?.length || 0
 

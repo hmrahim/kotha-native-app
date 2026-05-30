@@ -128,7 +128,12 @@ export default function ChatScreen() {
       return data ?? []
     },
     enabled: !!chat.id,
-    staleTime: 0,
+    // WhatsApp-style: প্রথমবার load হওয়ার পর আর reload হবে না
+    // নতুন message শুধু socket এ আসবে এবং queryClient.setQueryData দিয়ে add হবে
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 
   // inverted FlatList এর জন্য data উল্টো করতে হয়
