@@ -143,7 +143,16 @@ const showIncomingScreen = (router, dispatch, data) => {
       },
     },
   })
-  try { router.push({ pathname: '/incoming-call', params: {} }) } catch (_) { }
+  // ✅ FIX: retry — router.push() first try তে fail করতে পারে
+  // (killed state থেকে app boot হলে navigation state settle হতে সময় লাগে)
+  const tryNavigate = (attempt) => {
+    try {
+      router.push({ pathname: '/incoming-call', params: {} })
+    } catch (e) {
+      if (attempt < 5) setTimeout(() => tryNavigate(attempt + 1), 300)
+    }
+  }
+  tryNavigate(0)
 }
 
 // ─── Navigate from notification data ────────────────────────────────────────
@@ -152,6 +161,13 @@ const navigateFromNotification = (router, data, dispatch) => {
 
   if (data?.notifType === 'call_accept' || (data?.wasAccepted && data?.callId)) {
     acceptCallDirect(router, dispatch, data)
+    return
+  }
+
+  // ✅ FIX: pending_incoming = killed/background থেকে app খুলেছে, incoming-call screen দেখাও
+  // incoming-call screen দেখাতে socket লাগে না — শুধু router আর dispatch লাগে
+  if (data?.notifType === 'pending_incoming' && data?.callId) {
+    showIncomingScreen(router, dispatch, data)
     return
   }
 
@@ -268,9 +284,19 @@ function AppNavigator() {
     }
     init()
 
+    // ✅ FIX: App killed state এ router এখনো ready নাও হতে পারে।
+    // Expo Router এর navigation state settle করতে একটু সময় লাগে।
+    // 800ms delay দিলে router ready থাকে এবং navigate কাজ করে।
     const checkInitial = async () => {
-      const data = await getInitialNotification()
-      if (data) navigateFromNotification(router, data, dispatch)
+      try {
+        const data = await getInitialNotification()
+        if (!data) return
+        // Router ready হওয়ার জন্য delay
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        navigateFromNotification(router, data, dispatch)
+      } catch (e) {
+        console.warn('[Layout] checkInitial error:', e?.message)
+      }
     }
     checkInitial()
 
@@ -303,8 +329,27 @@ function AppNavigator() {
       },
     })
 
-    const sub = AppState.addEventListener('change', (next) => {
-      if (appState.current.match(/inactive|background/) && next === 'active') clearBadge()
+    const sub = AppState.addEventListener('change', async (next) => {
+      if (appState.current.match(/inactive|background/) && next === 'active') {
+        clearBadge()
+
+        // ✅ FIX: Background state এ IncomingCallActivity MainActivity কে foreground এ আনলে
+        // এই listener fire হয়। @pendingIncomingCall চেক করো এবং screen দেখাও।
+        // (app killed state এ getInitialNotification() handle করে, এটা background state এর জন্য)
+        try {
+          const callRaw = await AsyncStorage.getItem('@pendingIncomingCall')
+          if (callRaw) {
+            await AsyncStorage.removeItem('@pendingIncomingCall')
+            const data = JSON.parse(callRaw)
+            const age = Date.now() - (data._savedAt || 0)
+            if (age < 45000) {
+              const { _savedAt, ...callData } = data
+              console.log('[Layout] ✅ Pending incoming call on foreground, callId:', callData?.callId)
+              waitForSocket(() => showIncomingScreen(router, dispatch, callData))
+            }
+          }
+        } catch (_) {}
+      }
       appState.current = next
     })
 

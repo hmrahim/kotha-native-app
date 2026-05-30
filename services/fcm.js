@@ -130,14 +130,14 @@ const showCallNotification = async (data) => {
           id:             'default',
           launchActivity: 'com.kotha.app.IncomingCallActivity',
           // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_NO_USER_ACTION
-          launchActivityFlags: [16777216, 262144],
+          launchActivityFlags: 268435456 | 536870912 | 67108864, // FLAG_NEW_TASK | FLAG_SINGLE_TOP | FLAG_CLEAR_TOP
         },
 
         // ✅ Notification body tap → IncomingCallActivity
         pressAction: {
           id:             'default',
           launchActivity: 'com.kotha.app.IncomingCallActivity',
-          launchActivityFlags: [16777216, 262144],
+          launchActivityFlags: 268435456 | 536870912 | 67108864, // FLAG_NEW_TASK | FLAG_SINGLE_TOP | FLAG_CLEAR_TOP
         },
 
         actions: [
@@ -146,7 +146,7 @@ const showCallNotification = async (data) => {
             pressAction: {
               id:             'accept',
               launchActivity: 'com.kotha.app.IncomingCallActivity',
-              launchActivityFlags: [16777216],
+              launchActivityFlags: 268435456 | 536870912, // FLAG_NEW_TASK | FLAG_SINGLE_TOP
             },
           },
           {
@@ -247,6 +247,22 @@ export const setupNotificationListeners = ({ onTap }) => {
 export const getInitialNotification = async () => {
   try {
     const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default
+
+    // ✅ FIX: Incoming call check — সবার আগে! App killed/background থেকে
+    // fullScreenAction বা notification tap এ এসে থাকলে এটা থাকবে।
+    // 45 second-এর বেশি পুরনো হলে ignore করো (call এরমধ্যে শেষ হয়ে গেছে)।
+    const incomingRaw = await AsyncStorage.getItem('@pendingIncomingCall')
+    if (incomingRaw) {
+      await AsyncStorage.removeItem('@pendingIncomingCall')
+      const data = JSON.parse(incomingRaw)
+      const age = Date.now() - (data._savedAt || 0)
+      if (age < 45000) {
+        const { _savedAt, ...callData } = data
+        console.log('[FCM] ✅ Pending incoming call found, callId:', callData?.callId, 'age:', age + 'ms')
+        return { ...callData, notifType: 'pending_incoming' }
+      }
+      console.log('[FCM] ⚠️ Pending incoming call expired, age:', age + 'ms, skipping')
+    }
 
     // ✅ Call accept check
     const callRaw = await AsyncStorage.getItem('@pendingCallAccept')

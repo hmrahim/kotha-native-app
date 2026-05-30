@@ -11,15 +11,12 @@ import messaging from '@react-native-firebase/messaging'
 const API_URL = 'https://kotha-server-c5wy.onrender.com/api'
 
 // ─── Channel Setup ────────────────────────────────────────────────────────────
-// App killed state এও channel exist করা দরকার।
-// sound নাম = asset file নাম WITHOUT extension (Android নিজেই খোঁজে)
-// ringtun.mp3 → 'ringtun', received.mp3 → 'received'
 async function setupChannels() {
   await notifee.createChannel({
     id: 'incoming_call',
     name: 'Incoming Calls',
     importance: AndroidImportance.HIGH,
-    sound: 'ringtun',          // ✅ FIX: 'ringtone' → 'ringtun' (actual filename)
+    sound: 'ringtun',
     vibration: true,
     vibrationPattern: [100, 1000, 500, 1000],
     bypassDnd: true,
@@ -30,7 +27,7 @@ async function setupChannels() {
     id: 'messages',
     name: 'Messages',
     importance: AndroidImportance.HIGH,
-    sound: 'received',         // ✅ received.mp3 → 'received'
+    sound: 'received',
     vibration: true,
     vibrationPattern: [100, 250, 100, 250],
   })
@@ -41,6 +38,14 @@ setupChannels()
 // ✅ Screen off / lock screen / যেকোনো app এর উপরে call screen দেখাবে
 async function showCallNotification(data) {
   try {
+    // ✅ FIX: launchActivityFlags must be a single integer bitmask, NOT an array
+    // Notifee v9+ এ array format কাজ করে না properly
+    // FLAG_ACTIVITY_NEW_TASK (0x10000000) = 268435456
+    // FLAG_ACTIVITY_SINGLE_TOP (0x20000000) = 536870912
+    // FLAG_ACTIVITY_CLEAR_TOP (0x04000000) = 67108864
+    // Combined: 268435456 | 536870912 | 67108864 = 872415232
+    const LAUNCH_FLAGS = 268435456 | 536870912 | 67108864
+
     await notifee.displayNotification({
       id:    `call_${data.callId}`,
       title: data.callerName || 'Incoming Call',
@@ -58,15 +63,14 @@ async function showCallNotification(data) {
         fullScreenAction: {
           id:             'default',
           launchActivity: 'com.kotha.app.IncomingCallActivity',
-          // FLAG_ACTIVITY_NEW_TASK (0x10000000) | FLAG_ACTIVITY_NO_USER_ACTION (0x00040000)
-          launchActivityFlags: [16777216, 262144],
+          launchActivityFlags: LAUNCH_FLAGS,
         },
 
         // ✅ Notification body tap → IncomingCallActivity
         pressAction: {
           id:             'default',
           launchActivity: 'com.kotha.app.IncomingCallActivity',
-          launchActivityFlags: [16777216, 262144],
+          launchActivityFlags: LAUNCH_FLAGS,
         },
 
         actions: [
@@ -75,7 +79,7 @@ async function showCallNotification(data) {
             pressAction: {
               id:             'accept',
               launchActivity: 'com.kotha.app.IncomingCallActivity',
-              launchActivityFlags: [16777216],
+              launchActivityFlags: 268435456 | 536870912,
             },
           },
           {
@@ -84,12 +88,12 @@ async function showCallNotification(data) {
           },
         ],
 
-        sound:            'ringtun',         // assets/sound/ringtun.mp3
+        sound:            'ringtun',
         vibrationPattern: [100, 1000, 500, 1000],
         lights:           ['#0084FF', 500, 500],
         ongoing:          true,
         autoCancel:       false,
-        wakeUpScreen:     true,              // ✅ screen জ্বলবে
+        wakeUpScreen:     true,   // ✅ screen জ্বলবে
         showChronometer:  false,
         asForegroundService: false,
       },
@@ -108,13 +112,12 @@ async function showMessageNotification(data) {
       body:  data.body       || 'Sent you a message',
       android: {
         channelId:   'messages',
-        sound:       'received',   // ✅ explicit sound
+        sound:       'received',
         pressAction: { id: 'default', launchActivity: 'default' },
         importance:  AndroidImportance.HIGH,
       },
       data,
     })
-    console.log('[BG] ✅ Message notification displayed')
   } catch (e) {
     console.warn('[BG] showMessageNotification error:', e?.message)
   }
@@ -123,7 +126,6 @@ async function showMessageNotification(data) {
 // ─── Reject Call via HTTP ─────────────────────────────────────────────────────
 async function rejectCallHttp(callId) {
   try {
-    // ✅ Auth token ছাড়াই reject করতে পারবে (server এ এই endpoint open রাখো)
     await fetch(`${API_URL}/calls/${callId}/reject`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -140,7 +142,7 @@ async function saveCallAccept(data) {
   try {
     await AsyncStorage.setItem(
       '@pendingCallAccept',
-      JSON.stringify({ ...data, wasAccepted: true })
+      JSON.stringify({ ...data, wasAccepted: true, _savedAt: Date.now() })
     )
     console.log('[BG] ✅ Call accept saved, callId:', data?.callId)
   } catch (e) {
@@ -149,16 +151,30 @@ async function saveCallAccept(data) {
 }
 
 // ─── 1. FCM Background/Killed Handler ────────────────────────────────────────
-// ✅ KEY FIX: এই handler শুধু কাজ করবে যদি FCM payload DATA-ONLY হয়।
-// Server থেকে পাঠাতে হবে:
-//   { data: { type, ... } }           ← ✅ সঠিক (data-only)
+// ✅ KEY: Server থেকে DATA-ONLY payload পাঠাতে হবে
+//   { data: { type, ... } }           ← ✅ সঠিক (handler fire হয়)
 //   { notification: {...}, data: {} } ← ❌ ভুল (Android নিজে handle করে, handler fire হয় না)
 messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   const data = remoteMessage?.data || {}
   console.log('[BG] FCM background/killed message received, type:', data?.type)
 
   if (data?.type === 'incoming_call' && data?.callId) {
+    // ✅ Notification দেখাও
     await showCallNotification(data)
+    // ✅ AsyncStorage তে save করো — app boot হলে getInitialNotification() পড়বে
+    await AsyncStorage.setItem(
+      '@pendingIncomingCall',
+      JSON.stringify({ ...data, _savedAt: Date.now() })
+    )
+    return
+  }
+
+  // ✅ Call cancel/end FCM — pending clear করো
+  if (data?.type === 'call_ended' || data?.type === 'call_cancelled') {
+    await AsyncStorage.removeItem('@pendingIncomingCall')
+    if (data?.callId) {
+      try { await notifee.cancelNotification(`call_${data.callId}`) } catch (_) {}
+    }
     return
   }
 
@@ -177,13 +193,16 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
   const data = notification?.data || {}
   console.log('[BG] Notifee background event, type:', type, 'action:', pressAction?.id)
 
-  // Notification এ tap (body press)
+  // Notification body tap
   if (type === EventType.PRESS) {
     await notifee.cancelNotification(notification.id)
 
     if (data?.type === 'incoming_call') {
-      // Call notification tap = accept হিসেবে ধরো
-      await saveCallAccept(data)
+      // ✅ Notification body tap = incoming-call SCREEN দেখাও (auto-accept না!)
+      await AsyncStorage.setItem(
+        '@pendingIncomingCall',
+        JSON.stringify({ ...data, _savedAt: Date.now() })
+      )
       return
     }
 
@@ -192,8 +211,8 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
         await AsyncStorage.setItem(
           '@pendingMessageTap',
           JSON.stringify({
-            senderId:   data.senderId,
-            senderName: data.senderName,
+            senderId:     data.senderId,
+            senderName:   data.senderName,
             senderAvatar: data.senderAvatar || '',
           })
         )
@@ -207,10 +226,12 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     await notifee.cancelNotification(notification.id)
 
     if (pressAction?.id === 'accept' && data?.callId) {
+      await AsyncStorage.removeItem('@pendingIncomingCall')
       await saveCallAccept(data)
     }
 
     if (pressAction?.id === 'decline' && data?.callId) {
+      await AsyncStorage.removeItem('@pendingIncomingCall')
       await rejectCallHttp(data.callId)
     }
   }
@@ -218,6 +239,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
   // Notification dismissed (swipe away)
   if (type === EventType.DISMISSED) {
     if (data?.type === 'incoming_call' && data?.callId) {
+      await AsyncStorage.removeItem('@pendingIncomingCall')
       await rejectCallHttp(data.callId)
     }
   }
